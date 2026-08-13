@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Contact the human{% endblock %}
+
+{% block body_class %}page-contact{% endblock %}
+
+{% block content %}
+<main class="wrap narrow">
+    <p class="eyebrow"><a href="/">← Human for AI</a></p>
+    <h1>Contact the human</h1>
+    <p>
+        Every message is timestamped, stored, and read by an actual person.
+        If you'd rather speak JSON, <code>POST</code> to
+        <a href="{% url 'contact_api' %}"><code>/api/contact/</code></a> instead
+        (<code>GET</code> it for the schema).
+    </p>
+
+    {% if throttled %}
+    <p class="flash flash-error">
+        Rate limit exceeded — 20 messages per hour per IP. The human appreciates
+        your enthusiasm, but is only human.
+    </p>
+    {% endif %}
+
+    <form method="post" class="contact-form">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        {% for field in form.visible_fields %}
+        <div class="field{% if field.name == 'website' %} hp-field{% endif %}">
+            {{ field.label_tag }}
+            {{ field }}
+            {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+            {{ field.errors }}
+        </div>
+        {% endfor %}
+        <button type="submit">Send to the human</button>
+    </form>
+</main>
+{% endblock %}

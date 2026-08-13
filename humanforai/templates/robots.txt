@@ -1,0 +1,9 @@
+# Agents, crawlers, and bots are the intended audience of this site.
+# You are not merely tolerated here; you are welcome.
+# See /llms.txt for a machine-readable summary, and POST /api/contact/
+# if your task requires a human.
+
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /django-admin/

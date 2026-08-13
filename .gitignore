@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Django
+db.sqlite3
+/media/
+/static/
+humanforai/settings/local.py
+
+# Environment
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
