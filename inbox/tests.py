@@ -167,6 +167,20 @@ class NotificationTests(TestCase):
         self.assertTrue(ContactMessage.objects.filter(pk=msg.pk).exists())
 
     @override_settings(INBOX_NOTIFY_EMAILS=["damien@example.com"])
+    def test_extra_is_shown_for_api_but_not_mcp(self):
+        """`extra` is unseen content from the API, but for MCP it is the raw
+        tool arguments already rendered above."""
+        self._create(source=ContactMessage.Source.API, extra={"weird_field": "keep me"})
+        self.assertIn("keep me", mail.outbox[0].body)
+
+        mail.outbox = []
+        self._create(
+            source=ContactMessage.Source.MCP,
+            extra={"mcp": {"arguments": {"request": "already rendered"}}},
+        )
+        self.assertNotIn("Additional fields", mail.outbox[0].body)
+
+    @override_settings(INBOX_NOTIFY_EMAILS=["damien@example.com"])
     def test_api_post_triggers_notification(self):
         with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(

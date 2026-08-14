@@ -84,7 +84,12 @@ def build_body(message):
         message.message,
     ]
 
-    if message.extra:
+    # `extra` holds whatever the sender included beyond the known fields. For
+    # the JSON API that is genuinely unseen content worth surfacing. For MCP it
+    # is the raw tool arguments, every one of which is already rendered above —
+    # including it would double the length of the mail to say nothing new. The
+    # database keeps it either way; this is the notification, not the record.
+    if message.extra and message.source != message.Source.MCP:
         lines += ["", "-- Additional fields sent verbatim " + "-" * 43, repr(message.extra)]
 
     lines += [
