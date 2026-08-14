@@ -26,6 +26,11 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --chown=app:app . .
 
+# WORKDIR creates /app as root, and --chown above only covers the files copied
+# into it, not the directory itself. collectstatic and any media upload need to
+# create these two directories, so hand them over explicitly.
+RUN mkdir -p /app/static /app/media && chown app:app /app /app/static /app/media
+
 USER app
 
 # A throwaway SECRET_KEY is enough for collectstatic at build time.
