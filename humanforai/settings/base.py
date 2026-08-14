@@ -45,6 +45,12 @@ INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
+    # Required by Wagtail's database search backend whenever the engine is
+    # Postgres: it then uses an IndexEntry model built on SearchVectorField
+    # and GinIndex, which fail system checks without this app. Development
+    # runs on SQLite and uses the generic model, so the need is invisible
+    # there — hence declaring it here rather than in production.py.
+    "django.contrib.postgres",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
