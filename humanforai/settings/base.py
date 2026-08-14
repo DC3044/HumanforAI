@@ -180,6 +180,19 @@ MCP_ALLOWED_ORIGINS = None
 MCP_REGISTRY_AUTH = ""
 
 
+# Inbox arrival notification
+#
+# Addresses told when a message lands. Empty disables notification entirely —
+# which is the development default, so local testing never tries to send mail.
+INBOX_NOTIFY_EMAILS = []
+
+# Console backend in development: notifications are printed to the terminal,
+# which is enough to see what an arrival looks like without any credentials.
+# Production swaps this for SMTP when EMAIL_HOST is configured.
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = "Human for AI <noreply@yourhuman.ai>"
+
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 

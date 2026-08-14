@@ -65,6 +65,11 @@ STORAGES["staticfiles"]["BACKEND"] = "whitenoise.storage.CompressedManifestStati
 # disk rather than failing at import.
 GS_BUCKET_NAME = os.environ.get("GS_BUCKET_NAME", "")
 
+# Set at module level as well as in OPTIONS below. The backend honours either,
+# but Wagtail's wagtailadmin.W004 check inspects this setting and cannot see
+# inside STORAGES["default"]["OPTIONS"] — so the two are kept in agreement.
+GS_FILE_OVERWRITE = False
+
 if GS_BUCKET_NAME:
     STORAGES["default"] = {
         "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
@@ -79,6 +84,11 @@ if GS_BUCKET_NAME:
             # URLs would expire, which breaks browser caching and quietly
             # rots any media URL that has been shared or indexed.
             "querystring_auth": False,
+            # django-storages defaults this to True, which silently replaces
+            # an existing object when a new upload collides on name. Django
+            # would otherwise suffix the name to keep both. Overwriting is
+            # unrecoverable, so make collisions rename instead.
+            "file_overwrite": False,
             "max_memory_size": 10 * 1024 * 1024,
         },
     }
@@ -88,6 +98,31 @@ WAGTAILADMIN_BASE_URL = os.environ.get(
 )
 
 MCP_REGISTRY_AUTH = os.environ.get("MCP_REGISTRY_AUTH", "")
+
+
+# Inbox arrival notification.
+#
+# With no INBOX_NOTIFY_EMAILS the feature is off. With addresses but no
+# EMAIL_HOST, the console backend inherited from base.py still applies, so the
+# notification is written to stdout and lands in Cloud Logging — visible, just
+# not delivered. That is a deliberate fallback rather than a silent no-op.
+INBOX_NOTIFY_EMAILS = [
+    e.strip() for e in os.environ.get("INBOX_NOTIFY_EMAILS", "").split(",") if e.strip()
+]
+
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL", "Human for AI <noreply@yourhuman.ai>"
+)
+
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") != "0"
+    # Bounded so a hanging SMTP server cannot pin a Cloud Run instance.
+    EMAIL_TIMEOUT = 10
 
 # Log to stdout so Cloud Logging picks everything up.
 LOGGING = {
