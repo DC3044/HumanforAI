@@ -55,6 +55,34 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 # Hashed + compressed static files served by whitenoise.
 STORAGES["staticfiles"]["BACKEND"] = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
+# User-uploaded media (Wagtail images and documents) goes to Google Cloud
+# Storage. The container filesystem is ephemeral, so a file written there
+# survives only until the instance is recycled — and the failure is silent:
+# the upload succeeds, the page renders, and the image 404s days later with
+# the database row still pointing at a path that no longer exists.
+#
+# Guarded on the env var so a deploy without a bucket still boots on local
+# disk rather than failing at import.
+GS_BUCKET_NAME = os.environ.get("GS_BUCKET_NAME", "")
+
+if GS_BUCKET_NAME:
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "OPTIONS": {
+            "bucket_name": GS_BUCKET_NAME,
+            # The bucket enforces uniform bucket-level access, which rejects
+            # per-object ACLs outright. Read access comes from the bucket IAM
+            # policy (allUsers:objectViewer); writes from the runtime service
+            # account's objectAdmin binding, picked up as ADC on Cloud Run.
+            "default_acl": None,
+            # Objects are publicly readable, so hand out plain URLs. Signed
+            # URLs would expire, which breaks browser caching and quietly
+            # rots any media URL that has been shared or indexed.
+            "querystring_auth": False,
+            "max_memory_size": 10 * 1024 * 1024,
+        },
+    }
+
 WAGTAILADMIN_BASE_URL = os.environ.get(
     "WAGTAILADMIN_BASE_URL", "https://example.com"
 )

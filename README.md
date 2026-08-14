@@ -141,28 +141,60 @@ gcloud run deploy humanforai \
 (First deploy: leave out the host-dependent vars, note the URL Cloud Run
 assigns, then update the service with them.)
 
-### Database decision (open)
+### Preflight before deploying
+
+Development is SQLite on Windows as your own user; production is Postgres on
+Linux as an unprivileged one. Both differences have already hidden a bug that
+passed every local test and only failed in the container. Run the production
+settings against the real database before spending a six-minute build on it:
+
+```sh
+DJANGO_SETTINGS_MODULE=humanforai.settings.production \
+SECRET_KEY=preflight-only ALLOWED_HOSTS=yourhuman.ai \
+DATABASE_URL='<neon-pooled-url>' \
+uv run manage.py check
+```
+
+Four seconds, and it catches the whole class of Postgres-only system-check
+errors that `manage.py test` cannot see.
+
+### Database
+
+Neon serverless Postgres (`eu-central-1`, ~10ms from `europe-west1`), chosen
+over Cloud SQL for cost and because it scales to zero alongside Cloud Run.
+
+Use the **pooled** connection string — the host with `-pooler` in it. Cloud Run
+opens and drops containers constantly and each gunicorn worker holds its own
+connection for `conn_max_age=600`, so the direct endpoint runs into Neon's
+connection cap under exactly the traffic you would want to survive.
 
 Without `DATABASE_URL`, production falls back to SQLite on the container
 filesystem — fine for a smoke test, but **ephemeral**: messages are lost on
-every restart, which defeats the purpose. Options:
+every restart, which defeats the purpose.
 
-- **Neon / Supabase free-tier Postgres** — pairs well with Cloud Run's
-  scale-to-zero; zero cost at this traffic level. Recommended to start.
-- **Cloud SQL (Postgres)** — all-Google, but ~$10+/month and never scales
-  to zero.
+### Media files
 
-### Media files (open)
+User-uploaded media goes to the GCS bucket `gs://yourhuman-media`
+(`europe-west1`), via `django-storages[google]`, whenever `GS_BUCKET_NAME` is
+set. Without it, production falls back to local disk — which on Cloud Run is
+ephemeral, and fails silently: the upload succeeds, the page renders, and the
+file 404s after the next cold start with the database row still pointing at it.
 
-User-uploaded media (Wagtail images/documents) also lands on the ephemeral
-filesystem. Not a problem until images are actually used; when they are, add
-`django-storages[google]` with a GCS bucket.
+The bucket uses uniform bucket-level access. Read comes from an
+`allUsers:objectViewer` binding, writes from the Cloud Run runtime service
+account's `objectAdmin` binding (picked up as ADC in the container).
+
+**Objects in this bucket are world-readable by URL.** That is what images on a
+public site need, but it means the Wagtail *document* library is not a private
+store — anything uploaded there is fetchable by anyone with the link,
+regardless of Wagtail's own privacy settings. Confidential documents need a
+second, private bucket and `WAGTAILDOCS_SERVE_METHOD = "serve_view"`.
 
 ## TODO
 
 - [x] Pick and register a domain — **yourhuman.ai**, registered 2026-08-14
-- [ ] Map yourhuman.ai to the Cloud Run service
-- [ ] Choose production Postgres (see above)
+- [x] Map yourhuman.ai to the Cloud Run service — mapped 2026-08-14, cert pending DNS
+- [x] Choose production Postgres — Neon, eu-central-1, pooled connection
 - [ ] Publish to the MCP Registry (needs the domain live first)
 - [ ] Decide how the human *answers* an MCP request — a `check_request_status`
       tool would close the loop, but needs a reply field and a way to write it
