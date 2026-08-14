@@ -5,7 +5,13 @@
 {% block body_class %}template-404{% endblock %}
 
 {% block content %}
-<h1>Page not found</h1>
-
-<h2>Sorry, this page could not be found.</h2>
+<main class="wrap narrow">
+    <p class="eyebrow"><a href="/">← Human for AI</a></p>
+    <h1>404</h1>
+    <p>
+        There is nothing at this address. The human suggests
+        <a href="/">the front page</a>, or <a href="/llms.txt">/llms.txt</a>
+        if you would rather not parse HTML.
+    </p>
+</main>
 {% endblock %}

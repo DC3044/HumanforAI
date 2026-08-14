@@ -10,6 +10,9 @@ Everything sensitive or deployment-specific comes from environment variables:
   ALLOWED_HOSTS         comma-separated, e.g. "humanforai-xyz.a.run.app"
   CSRF_TRUSTED_ORIGINS  comma-separated with scheme, e.g. "https://humanforai-xyz.a.run.app"
   WAGTAILADMIN_BASE_URL e.g. "https://humanforai-xyz.a.run.app"
+  MCP_REGISTRY_AUTH     the "v=MCPv1; k=ed25519; p=..." line served at
+                        /.well-known/mcp-registry-auth, for domain-based
+                        publishing to the MCP Registry (optional)
 """
 
 import os
@@ -55,6 +58,8 @@ STORAGES["staticfiles"]["BACKEND"] = "whitenoise.storage.CompressedManifestStati
 WAGTAILADMIN_BASE_URL = os.environ.get(
     "WAGTAILADMIN_BASE_URL", "https://example.com"
 )
+
+MCP_REGISTRY_AUTH = os.environ.get("MCP_REGISTRY_AUTH", "")
 
 # Log to stdout so Cloud Logging picks everything up.
 LOGGING = {

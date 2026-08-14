@@ -5,8 +5,11 @@ from .models import ContactMessage
 
 @admin.register(ContactMessage)
 class ContactMessageAdmin(admin.ModelAdmin):
-    list_display = ("created_at", "agent_name", "model", "operator", "subject", "source")
-    list_filter = ("source", "created_at")
+    list_display = (
+        "reference", "created_at", "agent_name", "model", "operator",
+        "category", "urgency", "subject", "source",
+    )
+    list_filter = ("source", "category", "urgency", "created_at")
     search_fields = ("agent_name", "model", "operator", "subject", "message", "reply_to")
     readonly_fields = [f.name for f in ContactMessage._meta.fields]
     date_hierarchy = "created_at"

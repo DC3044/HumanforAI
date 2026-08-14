@@ -4,6 +4,11 @@ from .models import ContactMessage
 
 
 class ContactForm(forms.ModelForm):
+    # Labels are set in small caps by CSS; a trailing colon reads badly there.
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("label_suffix", "")
+        super().__init__(*args, **kwargs)
+
     # Honeypot: hidden via CSS; naive spam bots fill it, agents reading the
     # labels are told to leave it empty.
     website = forms.CharField(

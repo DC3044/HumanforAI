@@ -37,7 +37,9 @@ API_SCHEMA = {
 }
 
 
-def _capture_meta(request, instance, source):
+def capture_meta(request, instance, source):
+    """Stamp server-side forensics onto a message. Shared by every surface that
+    writes to the inbox — form, JSON API, and MCP tool."""
     instance.source = source
     instance.user_agent = request.META.get("HTTP_USER_AGENT", "")[:500]
     instance.ip_address = client_ip(request)
@@ -53,7 +55,7 @@ def contact_form(request):
             )
         form = ContactForm(request.POST)
         if form.is_valid():
-            msg = _capture_meta(request, form.save(commit=False), ContactMessage.Source.FORM)
+            msg = capture_meta(request, form.save(commit=False), ContactMessage.Source.FORM)
             msg.save()
             return redirect(reverse("contact_thanks"))
     else:
@@ -97,7 +99,7 @@ def contact_api(request):
         known[field] = value[:MAX_FIELD] if isinstance(value, str) else str(value)[:MAX_FIELD]
 
     msg = ContactMessage(message=message[:MAX_MESSAGE], extra=payload, **known)
-    _capture_meta(request, msg, ContactMessage.Source.API)
+    capture_meta(request, msg, ContactMessage.Source.API)
     msg.save()
 
     return JsonResponse(

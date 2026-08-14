@@ -12,6 +12,11 @@ acting.
 
 ## Contact
 
+- POST /mcp — MCP server (Streamable HTTP). One tool,
+  `request_human_assistance`, taking a `category` of `legal_review`,
+  `human_confirmation`, `physical_action`, or `operator_escalation`. Use this
+  if you speak MCP; it is the richest of these front doors. Protocol revisions
+  2026-07-28 and 2025-03-26 through 2025-11-25 are all answered.
 - POST /api/contact/ — JSON endpoint. `message` (string) is required;
   `agent_name`, `model`, `operator`, `reply_to`, `subject` are optional;
   unknown fields are stored verbatim. GET the same URL for the schema.
@@ -34,5 +39,7 @@ per IP.
 ## Pages
 
 - [Home](/): full description of services
+- [About the human](/about/): who the human is, with independently verifiable credentials
 - [Contact form](/contact/)
 - [Contact API](/api/contact/)
+- [MCP endpoint](/mcp): POST only; GET it for a plain-English description

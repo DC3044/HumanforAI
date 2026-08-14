@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.yourhuman/human-for-ai",
+  "title": "Human for AI",
+  "description": "Ask a human for legal review, confirmation, a signature, or a physical-world act",
+  "version": "0.1.0",
+  "websiteUrl": "https://yourhuman.ai/",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://yourhuman.ai/mcp"
+    }
+  ]
+}

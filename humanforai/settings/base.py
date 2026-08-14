@@ -26,6 +26,7 @@ BASE_DIR = PROJECT_DIR.parent
 INSTALLED_APPS = [
     "home",
     "inbox",
+    "mcpserver",
     "search",
     "wagtail.contrib.forms",
     "wagtail.contrib.redirects",
@@ -158,6 +159,19 @@ STORAGES = {
 # Django sets a maximum of 1000 fields per form by default, but particularly complex page models
 # can exceed this limit within Wagtail's page editor.
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10_000
+
+
+# MCP server (/mcp)
+
+# Browser-based MCP clients may call the endpoint from any origin; it holds no
+# cookies or credentials, so cross-origin access grants nothing a direct POST
+# would not. Set to an explicit list of origins to narrow it.
+MCP_ALLOWED_ORIGINS = None
+
+# Contents of /.well-known/mcp-registry-auth: the `v=MCPv1; k=ed25519; p=...`
+# proof line the MCP Registry checks before letting us publish under a domain
+# namespace. Empty until the domain and signing key exist.
+MCP_REGISTRY_AUTH = ""
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
