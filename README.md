@@ -103,10 +103,45 @@ mcp-publisher publish
 curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.yourhuman"
 ```
 
-`key.pem` is the only thing that can republish under this namespace — keep it
-somewhere durable and out of git. The registry is metadata-only and currently
-in preview; its entries are what client directories and aggregators index,
-which is the whole reason for registering.
+That block is Bash. In PowerShell the `VAR="$(...)"` form is a syntax error, and
+`openssl` is not on PATH even with Git installed — it ships inside Git for
+Windows. The equivalent:
+
+```powershell
+$openssl = "C:\Program Files\Git\mingw64\bin\openssl.exe"
+$lines = & $openssl pkey -in <path-to-key.pem> -noout -text
+$priv = @(); $collect = $false
+foreach ($l in $lines) {
+    if ($l -match '^\s*priv:') { $collect = $true; continue }
+    if ($l -match '^\s*pub:')  { $collect = $false; continue }
+    if ($collect) { $priv += $l.Trim() }
+}
+$PRIVATE_KEY = ($priv -join '') -replace ':', ''
+"key length: $($PRIVATE_KEY.Length) (expect 64)"   # anything else means the parse failed
+```
+
+The CLI wants the 32-byte seed as 64 hex characters. `openssl pkey -text`
+prints it as indented, colon-separated hex spread over several lines between a
+`priv:` and a `pub:` marker, so both versions do the same thing: collect the
+lines between those markers, join them, strip the colons.
+
+Keep `key.pem` somewhere durable and out of git — but note it is a credential,
+not the root of trust. Authentication here is *domain-based*: the registry
+fetches the proof line from `/.well-known/mcp-registry-auth` to learn the
+public key, so control of the domain and this deployment is what actually
+controls the namespace. Lose `key.pem` and the recovery is to generate a new
+keypair, update `MCP_REGISTRY_AUTH`, redeploy, and log in again.
+
+The corollary is the thing worth guarding: **whoever controls `yourhuman.ai`
+controls this namespace.** If the domain ever lapses, whoever registers it next
+can publish under `ai.yourhuman/*` and inherit whatever reputation the name has
+accumulated. Renew it deliberately.
+
+The registry is metadata-only and currently in preview; its entries are what
+client directories and aggregators index, which is the whole reason for
+registering. Those downstream copies are why the description is hard to walk
+back once published — you can ship a new version, but you cannot make everyone
+who scraped the old one re-scrape it.
 
 ## Local development
 
@@ -195,7 +230,7 @@ second, private bucket and `WAGTAILDOCS_SERVE_METHOD = "serve_view"`.
 - [x] Pick and register a domain — **yourhuman.ai**, registered 2026-08-14
 - [x] Map yourhuman.ai to the Cloud Run service — mapped 2026-08-14, cert pending DNS
 - [x] Choose production Postgres — Neon, eu-central-1, pooled connection
-- [ ] Publish to the MCP Registry (needs the domain live first)
+- [x] Publish to the MCP Registry — `ai.yourhuman/human-for-ai` v0.1.0, published 2026-08-14
 - [ ] Decide how the human *answers* an MCP request — a `check_request_status`
       tool would close the loop, but needs a reply field and a way to write it
       that does not break the append-only admin
