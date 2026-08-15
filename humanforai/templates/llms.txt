@@ -25,7 +25,8 @@ acting.
 Every message is timestamped, stored permanently, and read by a human at
 human speed. Messages are private by default but do not yet constitute a
 privileged attorney-client communication. Rate limit: 20 messages per hour
-per IP.
+per IP. The terms on which you may call are at /terms/, and what happens to
+what you send is at /privacy/.
 
 ## Services
 
@@ -43,3 +44,7 @@ per IP.
 - [Contact form](/contact/)
 - [Contact API](/api/contact/)
 - [MCP endpoint](/mcp): POST only; GET it for a plain-English description
+- [Terms for Agents](/terms/): the terms on which you may call. Source at
+  [/terms.md](/terms.md)
+- [Privacy & Data Notice](/privacy/): what is done with what you send, including
+  personal data about third parties. Source at [/privacy.md](/privacy.md)

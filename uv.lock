@@ -583,6 +583,7 @@ dependencies = [
     { name = "dj-database-url" },
     { name = "django-storages", extra = ["google"] },
     { name = "gunicorn" },
+    { name = "markdown" },
     { name = "psycopg", extra = ["binary"] },
     { name = "wagtail" },
     { name = "whitenoise" },
@@ -593,6 +594,7 @@ requires-dist = [
     { name = "dj-database-url", specifier = ">=3.1.2" },
     { name = "django-storages", extras = ["google"], specifier = ">=1.14.6" },
     { name = "gunicorn", specifier = ">=26.0.0" },
+    { name = "markdown", specifier = ">=3.10.3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "wagtail", specifier = ">=7.4.2" },
     { name = "whitenoise", specifier = ">=6.12.0" },
@@ -617,6 +619,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/9a/9192d6a74e2c6db4f705dd98f56be488e47373172c13f4916aeabc4d68b8/laces-0.1.2.tar.gz", hash = "sha256:3218e09c1889ae5cf3fc7a82f5bb63ec0c7879889b6a9760bfc42323c694b84d", size = 29264, upload-time = "2025-01-14T04:37:34.805Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/fe/31f76f5cb2579bdda208aa257ce5482653f22ab1bad3e128fe2f803fa2f1/laces-0.1.2-py3-none-any.whl", hash = "sha256:980cdaf9a31e883a2b8198132e2388931a4eb8814f5bfa5d8bba13ff9f657b7c", size = 22462, upload-time = "2025-01-14T04:37:30.636Z" },
+]
+
+[[package]]
+name = "markdown"
+version = "3.10.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/6f/da4c6aea59b3001f2e8c0ec7497475aadaf3b021c10cab5b2858f0f32b26/markdown-3.10.3.tar.gz", hash = "sha256:3589362618f743188b4d955b874402bc814f4f83f544dc207719f4baa7d9c45f", size = 372596, upload-time = "2026-07-30T19:05:29.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/69/4a5af2bc115a9a33fefe51709749de8262be3f9ba063d1753a837cdbc49c/markdown-3.10.3-py3-none-any.whl", hash = "sha256:fa6c92a00a4a3c98b22728c64a935ae1928250ae65058a6ded814d2cc29a4cea", size = 110757, upload-time = "2026-07-30T19:05:27.883Z" },
 ]
 
 [[package]]

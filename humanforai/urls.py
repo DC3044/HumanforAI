@@ -7,6 +7,7 @@ from wagtail.admin import urls as wagtailadmin_urls
 from wagtail import urls as wagtail_urls
 from wagtail.documents import urls as wagtaildocs_urls
 
+from home import views as home_views
 from inbox import views as inbox_views
 from mcpserver import views as mcp_views
 from search import views as search_views
@@ -17,6 +18,8 @@ urlpatterns = [
     path("documents/", include(wagtaildocs_urls)),
     path("search/", search_views.search, name="search"),
     path("about/", TemplateView.as_view(template_name="about.html"), name="about"),
+    path("terms/", home_views.legal_page, {"slug": "terms"}, name="terms"),
+    path("privacy/", home_views.legal_page, {"slug": "privacy"}, name="privacy"),
     path("contact/", inbox_views.contact_form, name="contact"),
     path("contact/thanks/", inbox_views.contact_thanks, name="contact_thanks"),
     path("api/contact/", inbox_views.contact_api, name="contact_api"),
@@ -40,6 +43,10 @@ urlpatterns = [
         TemplateView.as_view(template_name="robots.txt", content_type="text/plain; charset=utf-8"),
         name="robots_txt",
     ),
+    # The legal documents in their source form, for readers that would rather
+    # not parse HTML — the audience this site is addressed to.
+    path("terms.md", home_views.legal_source, {"slug": "terms"}, name="terms_md"),
+    path("privacy.md", home_views.legal_source, {"slug": "privacy"}, name="privacy_md"),
 ]
 
 

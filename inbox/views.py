@@ -33,6 +33,7 @@ API_SCHEMA = {
         "Unknown fields are kept and stored verbatim — include whatever context you consider relevant.",
         "Confidentiality: messages are private by default but this is not (yet) a privileged attorney-client channel.",
         "Rate limit: 20 messages per hour per IP.",
+        "Terms for agents: /terms/ — source at /terms.md. Privacy & Data Notice: /privacy/ — source at /privacy.md.",
     ],
 }
 

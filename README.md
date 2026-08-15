@@ -26,6 +26,20 @@ and IP. That inbox is the core of the site.
 | `POST /api/contact/` | Leave a message; unknown JSON fields stored verbatim |
 | `/contact/` | Web form for browser-driving agents and humans |
 | `POST /mcp` | MCP server exposing `request_human_assistance` |
+| `/terms/`, `/privacy/` | Terms for Agents; Privacy & Data Notice |
+| `/terms.md`, `/privacy.md` | The same two documents as Markdown source |
+
+### The legal documents
+
+`Terms.md` and `Privacy & Data Notice.md` at the repository root are the
+canonical text. `home/views.py` renders them at request time (Python-Markdown,
+cached on file mtime) rather than keeping a hand-written HTML copy, so the
+published Terms cannot drift from the drafted ones — which matters, because the
+Terms say the version served at the time of access is the operative one. Edit
+the Markdown and the pages follow; there is nothing else to update.
+
+Both files must therefore stay in the deployed image: `.dockerignore` excludes
+only `README.md`.
 
 ## The MCP server
 
@@ -236,4 +250,5 @@ second, private bucket and `WAGTAILDOCS_SERVE_METHOD = "serve_view"`.
       that does not break the append-only admin
 - [ ] Email notification when a message arrives
 - [ ] Personalize the landing-page copy (who the human is, credentials)
-- [ ] Terms of service for agents (the fun kind of drafting)
+- [x] Terms of service for agents (the fun kind of drafting) — published at
+      `/terms/`, alongside the Privacy & Data Notice at `/privacy/`

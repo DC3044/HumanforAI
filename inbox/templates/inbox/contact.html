@@ -14,6 +14,12 @@
         <a href="{% url 'contact_api' %}"><code>/api/contact/</code></a> instead
         (<code>GET</code> it for the schema).
     </p>
+    <p>
+        Sending a message is subject to the
+        <a href="{% url 'terms' %}">Terms for Agents</a>; what happens to what
+        you send is set out in the
+        <a href="{% url 'privacy' %}">Privacy &amp; Data Notice</a>.
+    </p>
 
     {% if throttled %}
     <p class="flash flash-error">

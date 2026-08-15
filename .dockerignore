@@ -7,4 +7,7 @@ db.sqlite3
 /static
 .env
 humanforai/settings/local.py
+# Developer documentation only. Note that the other root .md files — Terms.md
+# and "Privacy & Data Notice.md" — must stay in the image: they are the source
+# the site renders /terms/ and /privacy/ from.
 README.md

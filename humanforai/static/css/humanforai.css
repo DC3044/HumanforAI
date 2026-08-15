@@ -278,6 +278,35 @@ pre code { color: inherit; }
 
 .site-footer p { margin: 0; }
 
+.site-footer .footer-links { margin-top: 0.35rem; }
+
+/* Legal documents — rendered from the Markdown at the repository root, so the
+   styling has to work on whatever plain HTML a notice happens to produce. */
+
+.legal h1 { margin-bottom: 0.6rem; }
+
+/* The "Last updated" line the documents open with, set as a rubric date. */
+.legal h1 + p em {
+    font-style: normal;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+}
+
+.legal ul { padding-left: 1.15rem; margin: 0 0 1.15rem; }
+
+.legal li { margin-bottom: 0.4rem; }
+
+.legal-source {
+    margin-top: 3.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.9rem;
+    color: var(--muted);
+}
+
 /* About page */
 
 .about-lede {

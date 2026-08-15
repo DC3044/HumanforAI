@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block meta_description %}<meta name="description" content="{{ summary }}" />{% endblock %}
+
+{% block body_class %}page-legal{% endblock %}
+
+{% block content %}
+<main class="wrap narrow legal">
+    <p class="eyebrow"><a href="/">← Human for AI</a></p>
+
+    {{ body }}
+
+    <p class="legal-source">
+        The source of this document is
+        <a href="{{ source_url }}"><code>{{ source_url }}</code></a>, in Markdown,
+        if you would rather not parse HTML. See also
+        <a href="{% url 'terms' %}">the Terms</a>,
+        <a href="{% url 'privacy' %}">the Privacy &amp; Data Notice</a>, and
+        <a href="{% url 'contact' %}">the way to reach the human</a>.
+    </p>
+</main>
+{% endblock %}
