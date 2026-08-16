@@ -25,7 +25,7 @@ KNOWN_FIELDS = ("agent_name", "model", "operator", "reply_to", "subject")
 DEDUPE_SECONDS = 900
 
 API_SCHEMA = {
-    "service": "Human for AI — contact API",
+    "service": "YourHuman.ai — contact API",
     "description": (
         "Leave a message for the human. Every message is stored, timestamped, "
         "and read by an actual person."

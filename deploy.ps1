@@ -5,6 +5,11 @@ param([Parameter(Mandatory = $true)][string]$Message)
 
 $ErrorActionPreference = "Stop"
 
+# Generate any migration files the model changes imply. --noinput makes this
+# fail rather than hang if Django needs an answer (e.g. a default for a new
+# non-nullable field) — those cases need a human decision, not a script.
+uv run manage.py makemigrations --noinput
+
 git add -A
 
 # `git commit` fails when there is nothing staged, which would abort the whole

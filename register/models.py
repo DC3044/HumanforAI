@@ -62,7 +62,14 @@ class AgentVisit(models.Model):
 
     @property
     def label(self):
-        """The caller in one line: 'Claude-User (Anthropic, on behalf of a human)'."""
+        """The caller in one line: 'Claude-User (Anthropic, on behalf of a human)'.
+
+        An unrecognised caller gets its bare name. Appending "(unrecognised)"
+        only repeats what the adjacent kind column already says, on exactly the
+        rows that have the least to show.
+        """
         name = self.agent or "(unidentified)"
-        qualifiers = [q for q in (self.operator, self.get_kind_display()) if q]
+        qualifiers = [self.operator] if self.operator else []
+        if self.kind and self.kind != Kind.UNKNOWN:
+            qualifiers.append(self.get_kind_display())
         return f"{name} ({', '.join(qualifiers)})" if qualifiers else name

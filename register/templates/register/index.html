@@ -1,8 +1,10 @@
 {% extends "wagtailadmin/generic/index.html" %}
 
-{# The summary sits inside the header block rather than the listing one: the
-   listing div is swapped out wholesale on every search and filter refresh, and
-   the summary describes the whole register, not the current query. #}
+{% comment %}
+The summary sits inside the header block rather than the listing one: the
+listing div is swapped out wholesale on every search and filter refresh, and
+the summary describes the whole register, not the current query.
+{% endcomment %}
 {% block header %}
     {{ block.super }}
 
@@ -25,7 +27,8 @@
                 <tbody>
                     {% for row in summary_rows %}
                         <tr>
-                            <td>{{ row.agent|default:"(unidentified)" }}</td>
+                            {# Straight through to this caller's own rows below. #}
+                            <td><a href="?agent={{ row.agent|urlencode }}">{{ row.agent|default:"(unidentified)" }}</a></td>
                             <td>{{ row.operator|default:"—" }}</td>
                             <td>{{ row.kind }}</td>
                             <td>{{ row.hits }}</td>
@@ -35,13 +38,15 @@
                 </tbody>
             </table>
             <p class="help-block">
-                {{ summary_total }} call{{ summary_total|pluralize }} recorded in the window.
+                {{ summary_total }} call{{ summary_total|pluralize }} recorded in the window{% if summary_monitor_total %},
+                besides {{ summary_monitor_total }} liveness check{{ summary_monitor_total|pluralize }} not shown here{% endif %}.
                 Everything below is the full register, oldest kept for as long as the
                 retention setting allows.
             </p>
         {% else %}
             <p class="help-block">
-                Nothing has come through in the last {{ summary_window_days }} days.
+                No callers in the last {{ summary_window_days }} days{% if summary_monitor_total %} —
+                only {{ summary_monitor_total }} liveness check{{ summary_monitor_total|pluralize }}, not shown here{% endif %}.
             </p>
         {% endif %}
     </div>

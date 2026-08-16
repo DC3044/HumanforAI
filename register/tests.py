@@ -7,7 +7,7 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from .detect import Kind, Reason, identify
+from .detect import Kind, Reason, _fallback_name, identify, looks_like_a_browser
 from .models import AgentVisit
 
 BROWSER_UA = (
@@ -53,6 +53,131 @@ class IdentifyTests(TestCase):
         self.assertIsNone(identify(BROWSER_UA))
         self.assertIsNone(identify(""))
         self.assertIsNone(identify(None))
+
+    def test_liveness_probers_are_named_and_set_apart(self):
+        # Found this server through the MCP Registry listing. Genuine traffic,
+        # but on a timer, so it gets a kind of its own to keep out of the way.
+        sighting = identify("mcpbeat/0.1")
+        self.assertEqual(sighting.agent, "mcpbeat")
+        self.assertEqual(sighting.kind, Kind.MONITOR)
+
+    def test_javascript_runtimes_count_as_clients(self):
+        for user_agent, agent in [("Bun/1.1.34", "Bun"), ("Deno/2.0.6", "Deno")]:
+            with self.subTest(user_agent=user_agent):
+                sighting = identify(user_agent)
+                self.assertEqual(sighting.agent, agent)
+                self.assertEqual(sighting.kind, Kind.CLIENT)
+
+
+class FallbackNameTests(TestCase):
+    def test_a_user_agent_that_embeds_a_url_is_not_cut_mid_scheme(self):
+        self.assertEqual(
+            _fallback_name(
+                "GoogleStackdriverMonitoring-UptimeChecks"
+                "(https://cloud.google.com/monitoring)"
+            ),
+            "GoogleStackdriverMonitoring-UptimeChecks",
+        )
+
+    def test_ordinary_product_tokens_survive(self):
+        self.assertEqual(_fallback_name("some-unknown-thing/0.1"), "some-unknown-thing")
+        self.assertEqual(_fallback_name("Mozilla/5.0 (compatible; Thing)"), "Mozilla")
+
+    def test_nothing_at_all(self):
+        self.assertEqual(_fallback_name(""), "(no user agent)")
+
+
+class BrowserPresumptionTests(TestCase):
+    """The gate on ordinary pages: presume human, record everything else.
+
+    The pattern table names callers; it does not decide whether they count.
+    That split is the point — a caller nobody has heard of is most interesting
+    on the day it first calls, which is necessarily before anyone has added it
+    to a list.
+    """
+
+    REAL_BROWSERS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+    ]
+
+    NOT_BROWSERS = [
+        # Browser-shaped, but announcing themselves inside the string.
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Mozilla/5.0 (Linux; Android 6.0.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/W.X.Y.Z Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Mozilla/5.0 (compatible; SomeBrandNewAgent/0.3; +https://example.com/agent)",
+        "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/131.0.0.0 Safari/537.36",
+        # Not even pretending.
+        "python-requests/2.32.3",
+        "SentinelOracle/1.0",
+        "",
+    ]
+
+    def test_real_browsers_are_presumed_human(self):
+        for user_agent in self.REAL_BROWSERS:
+            with self.subTest(user_agent=user_agent[:40]):
+                self.assertTrue(looks_like_a_browser(user_agent))
+
+    def test_everything_else_is_not(self):
+        for user_agent in self.NOT_BROWSERS:
+            with self.subTest(user_agent=user_agent[:40]):
+                self.assertFalse(looks_like_a_browser(user_agent))
+
+    def test_an_unknown_agent_on_an_ordinary_page_is_recorded(self):
+        # The case the pattern table could never have covered: a product that
+        # did not exist when the table was written.
+        self.client.get("/", HTTP_USER_AGENT="SentinelOracle/1.0")
+
+        visit = AgentVisit.objects.get()
+        self.assertEqual(visit.agent, "SentinelOracle")
+        self.assertEqual(visit.reason, Reason.NOT_A_BROWSER)
+        self.assertEqual(visit.kind, Kind.UNKNOWN)
+
+    def test_a_browser_shaped_crawler_is_named_from_inside_its_string(self):
+        self.client.get(
+            "/",
+            HTTP_USER_AGENT="Mozilla/5.0 (compatible; SomeBrandNewAgent/0.3; +https://example.com/agent)",
+        )
+        # Not "Mozilla", which is what every one of these leads with.
+        self.assertEqual(AgentVisit.objects.get().agent, "SomeBrandNewAgent")
+
+    def test_a_browser_on_an_ordinary_page_is_still_not_recorded(self):
+        self.client.get("/", HTTP_USER_AGENT=BROWSER_UA)
+        self.assertFalse(AgentVisit.objects.exists())
+
+    def test_a_recognised_agent_keeps_its_attribution(self):
+        # Inversion decides whether to record; it does not take over naming.
+        self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+
+        visit = AgentVisit.objects.get()
+        self.assertEqual(visit.reason, Reason.USER_AGENT)
+        self.assertEqual(visit.operator, "Anthropic")
+        self.assertEqual(visit.kind, Kind.CRAWLER)
+
+
+class IgnoredAgentTests(TestCase):
+    def test_self_monitoring_is_not_recorded_even_on_an_agent_surface(self):
+        # The case that prompted this: Cloud Monitoring POSTs to /mcp, which the
+        # surface rule would otherwise record once a minute forever.
+        self.client.get(
+            "/llms.txt",
+            HTTP_USER_AGENT="GoogleStackdriverMonitoring-UptimeChecks(https://cloud.google.com/monitoring)",
+        )
+        self.assertFalse(AgentVisit.objects.exists())
+
+    def test_third_party_probers_are_still_recorded(self):
+        # Not our infrastructure, so it stays in the register — it is simply
+        # kept out of the admin summary.
+        self.client.get("/llms.txt", HTTP_USER_AGENT="mcpbeat/0.1")
+        self.assertEqual(AgentVisit.objects.get().kind, Kind.MONITOR)
+
+    @override_settings(REGISTER_IGNORE_AGENTS=())
+    def test_the_list_is_a_setting_not_a_hard_rule(self):
+        self.client.get("/llms.txt", HTTP_USER_AGENT="GoogleStackdriverMonitoring-UptimeChecks")
+        self.assertTrue(AgentVisit.objects.exists())
 
 
 class MiddlewareTests(TestCase):
@@ -152,6 +277,11 @@ class LabelTests(TestCase):
         visit = AgentVisit(agent="curl", operator="", kind=Kind.CLIENT)
         self.assertEqual(visit.label, "curl (a bare HTTP client)")
 
+    def test_an_unrecognised_caller_is_not_told_so_twice(self):
+        # The kind column beside it already says "unrecognised".
+        visit = AgentVisit(agent="mcpbeat", operator="", kind=Kind.UNKNOWN)
+        self.assertEqual(visit.label, "mcpbeat")
+
 
 class PruneVisitsTests(TestCase):
     def setUp(self):
@@ -208,12 +338,64 @@ class AdminTests(TestCase):
         response = self.client.get("/admin/register/")
         self.assertEqual(response.context["summary_rows"][0]["kind"], "crawling")
 
+    def test_summary_sets_liveness_probes_aside_but_counts_them(self):
+        for _ in range(5):
+            AgentVisit.objects.create(
+                agent="mcpbeat", kind=Kind.MONITOR, reason=Reason.USER_AGENT,
+                method="POST", path="/mcp", status_code=200,
+            )
+
+        response = self.client.get("/admin/register/")
+        self.assertEqual(response.context["summary_total"], 1)
+        self.assertEqual(response.context["summary_monitor_total"], 5)
+        self.assertNotIn("mcpbeat", [r["agent"] for r in response.context["summary_rows"]])
+        self.assertContains(response, "besides 5 liveness checks not shown here")
+        # Still in the register itself, just not in the panel above it.
+        self.assertEqual(AgentVisit.objects.filter(agent="mcpbeat").count(), 5)
+
     def test_there_is_no_way_to_write_to_the_register(self):
         # Not merely forbidden — the routes do not exist, for a superuser who
         # would otherwise hold every permission.
         for path in ("/admin/register/new/", "/admin/register/edit/1/", "/admin/register/delete/1/"):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 404)
+
+    def test_filter_options_are_the_values_actually_present(self):
+        AgentVisit.objects.create(
+            agent="GPTBot", operator="OpenAI", kind=Kind.CRAWLER,
+            reason=Reason.USER_AGENT, method="POST", path="/mcp", status_code=404,
+        )
+        response = self.client.get("/admin/register/")
+        choices = dict(response.context["filters"].filters["agent"].extra["choices"])
+        self.assertEqual(set(choices), {"ClaudeBot", "GPTBot"})
+        # A caller that has never called is not offered as a filter.
+        self.assertNotIn("Bytespider", choices)
+
+    def test_filtering_by_caller_narrows_the_listing(self):
+        AgentVisit.objects.create(
+            agent="GPTBot", operator="OpenAI", kind=Kind.CRAWLER,
+            reason=Reason.USER_AGENT, method="GET", path="/", status_code=200,
+        )
+        response = self.client.get("/admin/register/?agent=GPTBot")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([v.agent for v in response.context["object_list"]], ["GPTBot"])
+
+    def test_the_summary_links_through_to_a_callers_own_rows(self):
+        response = self.client.get("/admin/register/")
+        self.assertContains(response, "?agent=ClaudeBot")
+
+    def test_a_date_range_filter_is_offered(self):
+        response = self.client.get("/admin/register/")
+        self.assertIn("seen_at", response.context["filters"].filters)
+
+    def test_the_register_can_be_exported(self):
+        response = self.client.get("/admin/register/?export=csv")
+        self.assertEqual(response.status_code, 200)
+        body = b"".join(response.streaming_content).decode("utf-8")
+        self.assertIn("ClaudeBot", body)
+        # The raw user agent goes too: the derived reading is an interpretation
+        # of it, and an export is where someone re-does the interpretation.
+        self.assertIn("user_agent", body.splitlines()[0].replace(" ", "_").lower())
 
     def test_inspect_view_is_available(self):
         visit = AgentVisit.objects.get()

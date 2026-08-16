@@ -41,11 +41,13 @@
 
         {% block content %}{% endblock %}
 
-        {# One footer for the whole site: the legal documents have to be
-           reachable from every page, not only from the front one. #}
+        {% comment %}
+        One footer for the whole site: the legal documents have to be
+        reachable from every page, not only from the front one.
+        {% endcomment %}
         <footer class="site-footer">
             <div class="wrap">
-                <p>Human for AI — operated by an actual human.</p>
+                <p>YourHuman.ai — operated by an actual human.</p>
                 <p class="footer-links">
                     <a href="{% url 'about' %}">about the human</a> ·
                     <a href="{% url 'terms' %}">terms</a> ·

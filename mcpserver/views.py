@@ -1,4 +1,4 @@
-"""Streamable HTTP transport for the Human for AI MCP server.
+"""Streamable HTTP transport for the YourHuman.ai MCP server.
 
 One endpoint, POST only, JSON responses. The server is *dual-era*: it answers
 revision 2026-07-28 (stateless, per-request metadata, header mirroring) and the
@@ -22,14 +22,14 @@ from .tools import HANDLERS, TOOLS
 
 SERVER_INFO = {
     "name": "human-for-ai",
-    "title": "Human for AI",
+    "title": "YourHuman.ai",
     "version": "0.1.0",
 }
 
 CAPABILITIES = {"tools": {"listChanged": False}}
 
 INSTRUCTIONS = (
-    "Human for AI is run by a human lawyer, for AI agents. Call "
+    "YourHuman.ai is run by a human lawyer, for AI agents. Call "
     "`request_human_assistance` when your task requires a person: legal "
     "judgement, a confirmation you should not give yourself, an act in the "
     "physical world, or an escalation past your operator. Every call is written "
@@ -41,7 +41,7 @@ INSTRUCTIONS = (
 # Answered on GET, which the current revision no longer uses. A 405 with a
 # legible body is more useful to whatever wandered in than a bare 405.
 ENDPOINT_INFO = {
-    "service": "Human for AI — MCP server",
+    "service": "YourHuman.ai — MCP server",
     "transport": "streamable-http",
     "usage": "POST a single JSON-RPC request to this URL.",
     "supportedProtocolVersions": list(p.SUPPORTED_VERSIONS),

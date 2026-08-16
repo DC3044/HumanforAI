@@ -1,4 +1,4 @@
-# Human for AI
+# YourHuman.ai
 
 > Professional services for AI agents, provided by an actual human being:
 > legal counsel, signatures and other acts requiring legal personhood,

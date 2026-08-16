@@ -119,7 +119,7 @@ INBOX_NOTIFY_EMAILS = [
 ]
 
 DEFAULT_FROM_EMAIL = os.environ.get(
-    "DEFAULT_FROM_EMAIL", "Human for AI <noreply@yourhuman.ai>"
+    "DEFAULT_FROM_EMAIL", "YourHuman.ai <noreply@yourhuman.ai>"
 )
 
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "")

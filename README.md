@@ -1,4 +1,4 @@
-# Human for AI
+# YourHuman.ai
 
 A website where a human offers services to AI agents. Partly a bit, partly a
 record-making attempt, partly a genuine practice area waiting to exist. There
@@ -213,23 +213,75 @@ came through, modelled on the "Register of Visits" at
 
 `RegisterOfVisitsMiddleware` sits directly after WhiteNoise, so static files
 never reach it, and records on the way out so it can keep the status code — a
-crawler collecting 404s is as interesting as one collecting 200s. A call is
-recorded when either test in `register/detect.py` passes:
+crawler collecting 404s is as interesting as one collecting 200s.
 
-- **the user agent is recognised** — a table of the real ones, from `GPTBot`,
-  `ClaudeBot` and `PerplexityBot` through to the bare clients an agent's tool
-  call actually arrives as (`python-requests`, `httpx`, `curl`, MCP clients);
-- **or the path is one only a machine wants** — `/mcp`, `/api/`, `/llms.txt`,
-  `/robots.txt`, `/terms.md`, `/privacy.md`, `/.well-known/`. This is the half
-  that catches the interesting callers: something with no user agent at all,
-  fetching `/llms.txt` and then POSTing to `/mcp`, is exactly the traffic this
-  site exists for, and an unfamiliar user agent is no reason to miss it.
+**Recording is by elimination, not by recognition.** `register/detect.py` holds
+a table of known agent user agents, but that table does not decide who counts —
+it only decides what they are *called*. A call is recorded unless it looks like
+a person's browser. In order:
+
+1. Infrastructure in `REGISTER_IGNORE_AGENTS` is dropped (see below).
+2. **The user agent is recognised** — `GPTBot`, `ClaudeBot`, `PerplexityBot` and
+   the rest, down to the bare clients an agent's tool call arrives as
+   (`python-requests`, `httpx`, `curl`, `Bun`, MCP clients). Recorded with an
+   operator and a kind. `reason="user_agent"`.
+3. **The path is one only a machine wants** — `/mcp`, `/api/`, `/llms.txt`,
+   `/robots.txt`, `/terms.md`, `/privacy.md`, `/.well-known/`. Recorded whatever
+   it calls itself, including nothing. `reason="surface"`.
+4. **It does not look like a browser** — `looks_like_a_browser()` wants
+   `Mozilla/` plus a real engine token and no bot marker. Anything failing that
+   is recorded. `reason="not_browser"`.
+
+Step 4 is the one that keeps this current. New agent products appear weekly; the
+set of things a real browser puts in a user agent has barely moved in a decade,
+so the stable half of the problem is the half worth encoding. A caller nobody
+has heard of is most interesting on the day it first calls — necessarily before
+anyone could have added it to a list.
+
+The `compatible;` token does most of the work in step 4: it is how a non-browser
+announces itself inside a browser-shaped string, and it catches the crawlers
+that neither call themselves a bot nor cite a URL. Internet Explorer used it
+too, which is the one false positive, and a harmless one.
+
+Callers that dress as browsers get named from inside their own string rather
+than from the leading `Mozilla` every one of them shares, so
+`Mozilla/5.0 (compatible; SomeBrandNewAgent/0.3; +https://…)` is filed under
+`SomeBrandNewAgent`.
+
+An agent that sends a *verbatim* browser user agent — headless Chrome,
+Playwright — passes step 4 and goes unrecorded. Nothing distinguishes it from a
+browser at the HTTP level, and a table of known agents would not have caught it
+either.
 
 Each row keeps the derived reading — agent, operator, and what it was doing
-(`crawling`, `answering a search`, `on behalf of a human`, `a bare HTTP
-client`) — alongside the raw user agent it was read from, because the reading is
-only ever an interpretation and may need revisiting. It also keeps `reason`,
-which of the two tests put the row there.
+(`crawling`, `answering a search`, `on behalf of a human`, `a bare HTTP client`,
+`health-checking`) — alongside the raw user agent it was read from, because the
+reading is only ever an interpretation and may need revisiting. It also keeps
+`reason`, which of the two tests put the row there.
+
+The first day in production settled what the recognition table is worth: **not
+one row came from it.** Every caller was caught by the path rule — `mcpbeat`
+doing a full MCP handshake against `/mcp`, `SentinelOracle` doing another,
+something Bun-based trying `GET /mcp` and getting a correct 405, and Cloud
+Monitoring's uptime check. A register built only on recognised user agents would
+have been empty on day one, which is why the table names callers instead of
+gating them.
+
+That first day also showed what buries it. Uptime checks arrive about once a
+minute, which is ~1,400 rows a day and six figures over the retention window,
+and the summary panel becomes a list of the site checking on itself. Two
+different problems, handled differently:
+
+- **Our own infrastructure is not recorded at all.** `REGISTER_IGNORE_AGENTS`
+  holds user-agent patterns — Cloud Monitoring, `GoogleHC`, `kube-probe`,
+  UptimeRobot, Pingdom — tested before either recording rule, since these reach
+  the site by POSTing to `/mcp` and the surface rule would otherwise take them
+  however plainly they identify themselves. Same reasoning as excluding
+  `/admin/`: that is the human, this is the host.
+- **Third-party probers are recorded but set aside.** `mcpbeat` found this
+  server through the MCP Registry listing and is genuine outside traffic, so it
+  keeps its row, classified `monitor`. The admin summary excludes that kind and
+  states the count it left out, so the omission is visible rather than silent.
 
 None of this is verified and none of it can be. User agents are self-declared
 and trivially forged; the table is a naming convenience, not a security control.
@@ -245,6 +297,13 @@ Both this and the inbox are read-only in the admin, enforced twice over by
 refuses everything else even to superusers, and a `get_urlpatterns` that never
 registers the add/edit/delete routes, so there is nothing to reach by typing a
 URL.
+
+The listing filters on caller, operator, kind, reason, method, status and a date
+range, with dropdown options built from the values actually present rather than
+a fixed list — so a caller that has never called is never offered. The summary
+rows link through to that caller's own entries, and the whole register exports
+to CSV, raw user agent included, since the derived reading is only ever an
+interpretation of it.
 
 Unlike the inbox — which records dealings and is never pruned — the register is
 telemetry about callers who did not ask to be written down, so it expires:

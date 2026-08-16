@@ -208,6 +208,22 @@ REGISTER_IGNORE_PREFIXES = (
     "/documents/",
 )
 
+# Callers the register ignores by user agent, matched case-insensitively as
+# regular expressions. This is for infrastructure that probes the site on a
+# timer — our own uptime checks and load-balancer health probes. They are not
+# visitors, they are the site checking on itself, and at one call a minute they
+# would fill the retention window with tens of thousands of rows and bury the
+# agents the register exists to show. Third-party probers that found us on their
+# own (mcpbeat, via the MCP Registry) are *not* listed here: those are recorded,
+# classified as `monitor`, and merely kept out of the admin summary.
+REGISTER_IGNORE_AGENTS = (
+    r"GoogleStackdriverMonitoring",
+    r"GoogleHC",
+    r"kube-probe",
+    r"UptimeRobot",
+    r"Pingdom",
+)
+
 
 # Inbox arrival notification
 #
@@ -219,7 +235,7 @@ INBOX_NOTIFY_EMAILS = []
 # which is enough to see what an arrival looks like without any credentials.
 # Production swaps this for SMTP when EMAIL_HOST is configured.
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-DEFAULT_FROM_EMAIL = "Human for AI <noreply@yourhuman.ai>"
+DEFAULT_FROM_EMAIL = "YourHuman.ai <noreply@yourhuman.ai>"
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -227,7 +243,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Wagtail settings
 
-WAGTAIL_SITE_NAME = "Human for AI"
+WAGTAIL_SITE_NAME = "YourHuman.ai"
 
 # Search
 # https://docs.wagtail.org/en/stable/topics/search/backends.html

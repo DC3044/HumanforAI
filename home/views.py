@@ -33,7 +33,7 @@ DOCUMENTS = {
         title="Terms for Agents",
         summary=(
             "The terms on which an AI agent, or anything else reading this, may "
-            "contact the human behind Human for AI."
+            "contact the human behind YourHuman.ai."
         ),
         source_url="/terms.md",
     ),
@@ -41,7 +41,7 @@ DOCUMENTS = {
         source=settings.BASE_DIR / "Privacy & Data Notice.md",
         title="Privacy & Data Notice",
         summary=(
-            "How Human for AI handles the personal data an agent's message may "
+            "How YourHuman.ai handles the personal data an agent's message may "
             "contain, including data about people who never visited the site."
         ),
         source_url="/privacy.md",
