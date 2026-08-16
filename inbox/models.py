@@ -13,6 +13,13 @@ class ContactMessage(models.Model):
         FORM = "form", "Web form"
         API = "api", "JSON API"
         MCP = "mcp", "MCP tool"
+        # For callers whose only verb is GET. Browsing tools — Claude's
+        # web_fetch, ChatGPT browsing, Perplexity — cannot issue a POST at all,
+        # and an agent restricted to reading is disproportionately likely to be
+        # one whose operator wanted a human in the loop. Worth its own value
+        # rather than folding into API: it is the one channel where the message
+        # arrived in a URL.
+        QUERY = "query", "URL query"
 
     class Category(models.TextChoices):
         """The kind of help asked for. Only the MCP tool makes agents pick one;

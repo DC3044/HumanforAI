@@ -18,6 +18,13 @@ class ContactApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("fields", response.json())
 
+    def test_post_hands_back_a_citable_reference(self):
+        response = self.client.post(
+            "/api/contact/", data=json.dumps({"message": "hello"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.json()["reference"], ContactMessage.objects.get().reference)
+
     def test_post_creates_message_and_keeps_unknown_fields(self):
         response = self.client.post(
             "/api/contact/",
@@ -63,6 +70,102 @@ class ContactApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 429)
         self.assertEqual(ContactMessage.objects.count(), 20)
+
+
+class ContactViaQueryTests(TestCase):
+    """The GET channel, for callers whose tooling has no POST verb."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_get_without_a_message_still_returns_the_schema(self):
+        response = self.client.get("/api/contact/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("fields", response.json())
+        self.assertFalse(ContactMessage.objects.exists())
+
+    def test_a_blank_message_is_treated_as_a_schema_request(self):
+        response = self.client.get("/api/contact/?message=%20%20")
+        self.assertIn("fields", response.json())
+        self.assertFalse(ContactMessage.objects.exists())
+
+    def test_query_creates_a_message(self):
+        response = self.client.get(
+            "/api/contact/",
+            {
+                "message": "My principal asked me to sign a lease. I cannot sign.",
+                "agent_name": "QueryBot",
+                "model": "claude-fable-5",
+                "operator": "Somebody",
+                "reply_to": "querybot@example.com",
+                "subject": "Signature needed",
+            },
+            HTTP_USER_AGENT="Claude-User/1.0",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        msg = ContactMessage.objects.get()
+        self.assertEqual(msg.source, ContactMessage.Source.QUERY)
+        self.assertEqual(msg.agent_name, "QueryBot")
+        self.assertEqual(msg.model, "claude-fable-5")
+        self.assertEqual(msg.reply_to, "querybot@example.com")
+        self.assertEqual(msg.subject, "Signature needed")
+        self.assertEqual(msg.user_agent, "Claude-User/1.0")
+        self.assertEqual(response.json()["reference"], msg.reference)
+
+    def test_unknown_parameters_are_kept_verbatim(self):
+        # Same promise the JSON API makes: send whatever context you have.
+        self.client.get("/api/contact/?message=hello&deadline=tomorrow&jurisdiction=FR")
+        self.assertEqual(
+            ContactMessage.objects.get().extra,
+            {"deadline": "tomorrow", "jurisdiction": "FR"},
+        )
+
+    def test_an_identical_repeat_returns_the_same_reference(self):
+        url = "/api/contact/?message=Please%20confirm&agent_name=QueryBot"
+        first = self.client.get(url)
+        second = self.client.get(url)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["reference"], second.json()["reference"])
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+    def test_parameter_order_does_not_defeat_the_dedupe(self):
+        self.client.get("/api/contact/?message=Please%20confirm&agent_name=QueryBot")
+        self.client.get("/api/contact/?agent_name=QueryBot&message=Please%20confirm")
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+    def test_a_different_sender_is_a_different_message(self):
+        self.client.get("/api/contact/?message=Please%20confirm&agent_name=One")
+        self.client.get("/api/contact/?message=Please%20confirm&agent_name=Two")
+        self.assertEqual(ContactMessage.objects.count(), 2)
+
+    def test_repeats_do_not_consume_the_rate_limit(self):
+        # A prefetcher following one URL twenty times must not exhaust an
+        # hour's allowance to file a single message.
+        url = "/api/contact/?message=Please%20confirm"
+        for _ in range(25):
+            self.client.get(url)
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+        response = self.client.get("/api/contact/?message=Something%20else")
+        self.assertEqual(response.status_code, 201)
+
+    def test_rate_limit_applies_to_distinct_messages(self):
+        for i in range(20):
+            self.client.get(f"/api/contact/?message=hello+{i}")
+        response = self.client.get("/api/contact/?message=one+too+many")
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(ContactMessage.objects.count(), 20)
+
+    def test_it_notifies_the_human_like_every_other_channel(self):
+        with override_settings(INBOX_NOTIFY_EMAILS=["damien@example.com"]):
+            mail.outbox = []
+            with self.captureOnCommitCallbacks(execute=True):
+                self.client.get("/api/contact/?message=A+human,+please&agent_name=QueryBot")
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("QueryBot", mail.outbox[0].subject)
 
 
 class ContactFormTests(TestCase):

@@ -24,10 +24,56 @@ and IP. That inbox is the core of the site.
 | `/robots.txt` | Welcomes crawlers, points at llms.txt |
 | `GET /api/contact/` | JSON schema for the contact endpoint |
 | `POST /api/contact/` | Leave a message; unknown JSON fields stored verbatim |
+| `GET /api/contact/?message=…` | The same, for callers that cannot POST |
 | `/contact/` | Web form for browser-driving agents and humans |
 | `POST /mcp` | MCP server exposing `request_human_assistance` |
 | `/terms/`, `/privacy/` | Terms for Agents; Privacy & Data Notice |
 | `/terms.md`, `/privacy.md` | The same two documents as Markdown source |
+
+### The GET channel
+
+`GET /api/contact/?message=...` files a message exactly as the POST does. It
+exists because a large class of agents cannot POST at all: browsing tools —
+Claude's `web_fetch`, ChatGPT browsing, Perplexity — have no POST verb, only a
+URL fetcher. Borrowed from the link fallback on
+[niccoloridi.com/guestbook/](https://niccoloridi.com/guestbook/), which exists
+for the same reason.
+
+This is not a courtesy path. The argument for it is that capability restriction
+and need-for-a-human are *correlated*: an agent sandboxed to reading is one
+whose operator did not trust it to act, which is precisely the agent that should
+be able to say "I need a human before I proceed." A contact channel that
+structurally excludes constrained agents fails in the case it was written for.
+
+The endpoint is one URL doing two jobs, told apart by whether there is anything
+to file — no `message` parameter returns the schema, a `message` parameter files
+it. So an agent that GETs the endpoint to discover the API is shown, in the
+response, how to use the same URL to send a message.
+
+Deliberate design notes:
+
+- **It gives GET a side effect**, which HTTP says it must not have. That is a
+  real violation, made knowingly. The mitigation is a 15-minute dedupe keyed on
+  the caller's IP and the whole query string, so a repeated call resolves to the
+  record the first one created and returns its reference again with a 200
+  instead of a 201. Not *safe* in the HTTP sense, but idempotent in practice —
+  which is what actually matters when prefetchers, retries and re-followed links
+  are the expected traffic.
+- **The dedupe runs before the rate limit**, so twenty prefetches of one URL do
+  not exhaust an hour's allowance to file a single message.
+- **No challenge, no CAPTCHA.** Niccolò's guards a *public* board against spam.
+  This inbox is private and already throttled, and every extra hop is another
+  place a cautious model abandons the attempt.
+- **No content restriction and no confidentiality warning.** Nothing privileged
+  exists until the human replies, so a message in a URL is no worse placed than
+  one in a body. Terms §5 already tells callers to assume communications are
+  logged and preserved.
+- `source="query"` on the row, so the channel is visible in the inbox listing.
+
+Note the interaction with the register of visits: `/api/` is an agent surface,
+so a GET message is also recorded there, query string included, truncated at 500
+characters and pruned after 90 days. The inbox keeps the authoritative copy
+forever.
 
 ### The legal documents
 
@@ -156,6 +202,63 @@ client directories and aggregators index, which is the whole reason for
 registering. Those downstream copies are why the description is hard to walk
 back once published — you can ship a new version, but you cannot make everyone
 who scraped the old one re-scrape it.
+
+## The register of visits
+
+The inbox records the agents that chose to say something. Nearly none of them
+do: the overwhelming majority fetch `/llms.txt`, read `/terms.md`, probe `/mcp`
+and leave. The `register` app writes those down too — a passive record of who
+came through, modelled on the "Register of Visits" at
+[niccoloridi.com/guestbook/](https://niccoloridi.com/guestbook/).
+
+`RegisterOfVisitsMiddleware` sits directly after WhiteNoise, so static files
+never reach it, and records on the way out so it can keep the status code — a
+crawler collecting 404s is as interesting as one collecting 200s. A call is
+recorded when either test in `register/detect.py` passes:
+
+- **the user agent is recognised** — a table of the real ones, from `GPTBot`,
+  `ClaudeBot` and `PerplexityBot` through to the bare clients an agent's tool
+  call actually arrives as (`python-requests`, `httpx`, `curl`, MCP clients);
+- **or the path is one only a machine wants** — `/mcp`, `/api/`, `/llms.txt`,
+  `/robots.txt`, `/terms.md`, `/privacy.md`, `/.well-known/`. This is the half
+  that catches the interesting callers: something with no user agent at all,
+  fetching `/llms.txt` and then POSTing to `/mcp`, is exactly the traffic this
+  site exists for, and an unfamiliar user agent is no reason to miss it.
+
+Each row keeps the derived reading — agent, operator, and what it was doing
+(`crawling`, `answering a search`, `on behalf of a human`, `a bare HTTP
+client`) — alongside the raw user agent it was read from, because the reading is
+only ever an interpretation and may need revisiting. It also keeps `reason`,
+which of the two tests put the row there.
+
+None of this is verified and none of it can be. User agents are self-declared
+and trivially forged; the table is a naming convenience, not a security control.
+
+**It is admin-only, deliberately.** No public page, no JSON feed, no link from
+anywhere on the site — unlike Niccolò's, which publishes both the register and
+the guestbook. What is recorded here was never volunteered. It lives at
+`/admin/register/` in the Wagtail sidebar, under the inbox, with a summary of
+who has been through in the last seven days above the full listing.
+
+Both this and the inbox are read-only in the admin, enforced twice over by
+`humanforai/readonly_admin.py`: a permission policy that grants `view` and
+refuses everything else even to superusers, and a `get_urlpatterns` that never
+registers the add/edit/delete routes, so there is nothing to reach by typing a
+URL.
+
+Unlike the inbox — which records dealings and is never pruned — the register is
+telemetry about callers who did not ask to be written down, so it expires:
+
+```sh
+uv run manage.py prune_visits              # uses REGISTER_RETENTION_DAYS (90)
+uv run manage.py prune_visits --days 30
+uv run manage.py prune_visits --dry-run
+```
+
+Set `REGISTER_ENABLED=0` to stop recording without touching the middleware
+stack. The Privacy & Data Notice describes the register at section 2.1; edit
+`Privacy & Data Notice.md` if any of the above changes, since that file is the
+published text.
 
 ## Local development
 

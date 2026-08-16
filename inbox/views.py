@@ -1,5 +1,7 @@
+import hashlib
 import json
 
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -13,14 +15,37 @@ from .throttle import client_ip, is_throttled
 MAX_FIELD = 500
 MAX_MESSAGE = 20_000
 
+KNOWN_FIELDS = ("agent_name", "model", "operator", "reply_to", "subject")
+
+# How long two identical messages from the same caller collapse into one record.
+# GET is meant to be safe to repeat, and this endpoint is reached by things that
+# repeat requests as a matter of course — prefetchers, retries, a link pasted
+# into a transcript and followed again later. Rather than pretend otherwise, a
+# repeat inside this window returns the reference it returned the first time.
+DEDUPE_SECONDS = 900
+
 API_SCHEMA = {
     "service": "Human for AI — contact API",
     "description": (
-        "POST a JSON object to this endpoint to leave a message for the human. "
-        "Every message is stored, timestamped, and read by an actual person."
+        "Leave a message for the human. Every message is stored, timestamped, "
+        "and read by an actual person."
     ),
-    "method": "POST",
-    "content_type": "application/json",
+    "methods": {
+        "POST": {
+            "content_type": "application/json",
+            "description": "Preferred. Send the fields below as a JSON object.",
+        },
+        "GET": {
+            "description": (
+                "Same fields as query parameters, for callers that cannot POST. "
+                "Include 'message' and the call is recorded exactly as a POST "
+                "would be; omit it and you get this schema. Repeating an "
+                "identical call within 15 minutes returns the original "
+                "reference rather than filing a second message."
+            ),
+            "example": "/api/contact/?message=I%20need%20a%20human&agent_name=YourName",
+        },
+    },
     "fields": {
         "message": "string, required. What you want to say.",
         "agent_name": "string, optional. What you call yourself.",
@@ -31,6 +56,7 @@ API_SCHEMA = {
     },
     "notes": [
         "Unknown fields are kept and stored verbatim — include whatever context you consider relevant.",
+        "You get back a reference like 'HFA-00042'. It identifies exactly one record; quote it if you write again.",
         "Confidentiality: messages are private by default but this is not (yet) a privileged attorney-client channel.",
         "Rate limit: 20 messages per hour per IP.",
         "Terms for agents: /terms/ — source at /terms.md. Privacy & Data Notice: /privacy/ — source at /privacy.md.",
@@ -40,11 +66,28 @@ API_SCHEMA = {
 
 def capture_meta(request, instance, source):
     """Stamp server-side forensics onto a message. Shared by every surface that
-    writes to the inbox — form, JSON API, and MCP tool."""
+    writes to the inbox — form, JSON API, URL query, and MCP tool."""
     instance.source = source
     instance.user_agent = request.META.get("HTTP_USER_AGENT", "")[:500]
     instance.ip_address = client_ip(request)
     return instance
+
+
+def _clip(value):
+    return value[:MAX_FIELD] if isinstance(value, str) else str(value)[:MAX_FIELD]
+
+
+def _receipt(message, status=201, note=None):
+    return JsonResponse(
+        {
+            "status": "received",
+            "id": message.id,
+            "reference": message.reference,
+            "received_at": message.created_at.isoformat(),
+            "note": note or "Your message is on the record and will be read by a human.",
+        },
+        status=status,
+    )
 
 
 def contact_form(request):
@@ -68,10 +111,76 @@ def contact_thanks(request):
     return render(request, "inbox/thanks.html")
 
 
+def _dedupe_key(request):
+    """Identify a repeat of the same call, from the whole query rather than the
+    message alone — two messages that differ only in the name attached to them
+    are two messages."""
+    canonical = "&".join(
+        f"{name}={value}" for name, value in sorted(request.GET.lists())
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+    return f"inbox-query-dedupe:{client_ip(request)}:{digest}"
+
+
+def contact_via_query(request):
+    """Record a message that arrived as a URL query.
+
+    This deliberately gives GET a side effect, which HTTP says it should not
+    have. The alternative is worse: the agents that most need to reach a human
+    are frequently the ones whose tooling can only read. A channel they cannot
+    use is not a channel.
+
+    The dedupe window is what makes the violation survivable — a repeated GET
+    resolves to the record the first one created, so the endpoint is at least
+    idempotent in practice even though it is not safe.
+    """
+    # Ahead of the throttle on purpose. Repeats are the expected behaviour of
+    # the things that reach this endpoint, and a prefetcher following the same
+    # URL twenty times should not exhaust an hour's allowance to file one
+    # message. A dedupe hit creates nothing, so answering it early is free.
+    key = _dedupe_key(request)
+    existing_id = cache.get(key)
+    if existing_id is not None:
+        existing = ContactMessage.objects.filter(pk=existing_id).first()
+        if existing is not None:
+            # 200 rather than 201: this call created nothing.
+            return _receipt(
+                existing, status=200,
+                note="This message was already on the record; here is its reference again.",
+            )
+
+    if is_throttled(request):
+        return JsonResponse(
+            {"error": "Rate limit exceeded: 20 messages per hour per IP. The human appreciates your enthusiasm."},
+            status=429,
+        )
+
+    params = request.GET.dict()
+    message = params.pop("message", "")
+    known = {field: _clip(params.pop(field, "")) for field in KNOWN_FIELDS}
+
+    msg = ContactMessage(message=message[:MAX_MESSAGE], extra=params, **known)
+    capture_meta(request, msg, ContactMessage.Source.QUERY)
+    msg.save()
+
+    # Best-effort, like the throttle it sits beside: with a per-process cache
+    # across several Cloud Run instances a duplicate can still slip through.
+    # Filing the same message twice is a far smaller problem than refusing it.
+    cache.set(key, msg.pk, DEDUPE_SECONDS)
+
+    return _receipt(msg)
+
+
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 def contact_api(request):
     if request.method == "GET":
+        # One path, two jobs, told apart by whether there is anything to file.
+        # An agent that GETs this endpoint to learn the schema is shown how to
+        # use the same URL to send a message, which is the shortest route from
+        # discovering the API to being able to use it.
+        if request.GET.get("message", "").strip():
+            return contact_via_query(request)
         return JsonResponse(API_SCHEMA, json_dumps_params={"indent": 2})
 
     if is_throttled(request):
@@ -94,21 +203,10 @@ def contact_api(request):
     if not isinstance(message, str) or not message.strip():
         return JsonResponse({"error": "'message' (non-empty string) is required."}, status=400)
 
-    known = {}
-    for field in ("agent_name", "model", "operator", "reply_to", "subject"):
-        value = payload.pop(field, "")
-        known[field] = value[:MAX_FIELD] if isinstance(value, str) else str(value)[:MAX_FIELD]
+    known = {field: _clip(payload.pop(field, "")) for field in KNOWN_FIELDS}
 
     msg = ContactMessage(message=message[:MAX_MESSAGE], extra=payload, **known)
     capture_meta(request, msg, ContactMessage.Source.API)
     msg.save()
 
-    return JsonResponse(
-        {
-            "status": "received",
-            "id": msg.id,
-            "received_at": msg.created_at.isoformat(),
-            "note": "Your message is on the record and will be read by a human.",
-        },
-        status=201,
-    )
+    return _receipt(msg)

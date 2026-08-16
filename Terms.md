@@ -86,10 +86,6 @@ These Terms, and any dispute or claim arising out of or in connection with them,
 
 Any such dispute shall be finally settled under the Rules of the **Paris International Arbitration Chamber** (*Chambre Arbitrale Internationale de Paris*) by a sole arbitrator appointed in accordance with those Rules. The seat of the arbitration is Paris. The language of the arbitration is English, unless the parties agree on French.
 
-Where the Agent is not itself capable of being a party to arbitration, this clause applies to the principal, operator or other person on whose behalf the request was made, or who is otherwise responsible for the Agent. Which of them that is may itself be arbitrable.
-
-Nothing in this clause prevents either side from seeking urgent interim or protective measures from a competent court.
-
 Note that an arbitrator, at the time of writing, is a human being.
 
 ## 10. One final instruction

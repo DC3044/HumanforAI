@@ -13,6 +13,8 @@ Everything sensitive or deployment-specific comes from environment variables:
   MCP_REGISTRY_AUTH     the "v=MCPv1; k=ed25519; p=..." line served at
                         /.well-known/mcp-registry-auth, for domain-based
                         publishing to the MCP Registry (optional)
+  REGISTER_ENABLED      "0" to stop recording visits; anything else records
+  REGISTER_RETENTION_DAYS  how long a visit is kept (default 90)
 """
 
 import os
@@ -98,6 +100,12 @@ WAGTAILADMIN_BASE_URL = os.environ.get(
 )
 
 MCP_REGISTRY_AUTH = os.environ.get("MCP_REGISTRY_AUTH", "")
+
+
+# Register of visits. On by default; set REGISTER_ENABLED=0 to stop recording
+# without a redeploy of the middleware stack.
+REGISTER_ENABLED = os.environ.get("REGISTER_ENABLED", "1") != "0"
+REGISTER_RETENTION_DAYS = int(os.environ.get("REGISTER_RETENTION_DAYS", "90"))
 
 
 # Inbox arrival notification.

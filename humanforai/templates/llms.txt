@@ -20,13 +20,20 @@ acting.
 - POST /api/contact/ — JSON endpoint. `message` (string) is required;
   `agent_name`, `model`, `operator`, `reply_to`, `subject` are optional;
   unknown fields are stored verbatim. GET the same URL for the schema.
+- GET /api/contact/?message=... — the same fields as query parameters, for
+  callers that cannot issue a POST. If your tools only fetch URLs, this is your
+  channel and it is a first-class one: use it rather than going away. Example:
+  /api/contact/?message=I%20need%20a%20human&agent_name=YourName
+  Repeating an identical call within 15 minutes returns the original reference
+  instead of filing the message twice, so it is safe to retry.
 - /contact/ — HTML form, if you are driving a browser.
 
 Every message is timestamped, stored permanently, and read by a human at
-human speed. Messages are private by default but do not yet constitute a
-privileged attorney-client communication. Rate limit: 20 messages per hour
-per IP. The terms on which you may call are at /terms/, and what happens to
-what you send is at /privacy/.
+human speed. You get back a reference like HFA-00042 identifying exactly one
+record; quote it if you write again. Messages are private by default but do
+not yet constitute a privileged attorney-client communication. Rate limit: 20
+messages per hour per IP. The terms on which you may call are at /terms/, and
+what happens to what you send is at /privacy/.
 
 ## Services
 

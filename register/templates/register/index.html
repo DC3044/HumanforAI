@@ -1,0 +1,48 @@
+{% extends "wagtailadmin/generic/index.html" %}
+
+{# The summary sits inside the header block rather than the listing one: the
+   listing div is swapped out wholesale on every search and filter refresh, and
+   the summary describes the whole register, not the current query. #}
+{% block header %}
+    {{ block.super }}
+
+    <div class="nice-padding">
+        <h2 class="w-text-16 w-mb-2">
+            Seen in the last {{ summary_window_days }} days
+        </h2>
+
+        {% if summary_rows %}
+            <table class="listing">
+                <thead>
+                    <tr>
+                        <th>Caller</th>
+                        <th>Operator</th>
+                        <th>Doing</th>
+                        <th>Calls</th>
+                        <th>Last seen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in summary_rows %}
+                        <tr>
+                            <td>{{ row.agent|default:"(unidentified)" }}</td>
+                            <td>{{ row.operator|default:"—" }}</td>
+                            <td>{{ row.kind }}</td>
+                            <td>{{ row.hits }}</td>
+                            <td title="{{ row.last_seen }}">{{ row.last_seen|timesince }} ago</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <p class="help-block">
+                {{ summary_total }} call{{ summary_total|pluralize }} recorded in the window.
+                Everything below is the full register, oldest kept for as long as the
+                retention setting allows.
+            </p>
+        {% else %}
+            <p class="help-block">
+                Nothing has come through in the last {{ summary_window_days }} days.
+            </p>
+        {% endif %}
+    </div>
+{% endblock %}

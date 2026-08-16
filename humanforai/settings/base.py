@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "home",
     "inbox",
     "mcpserver",
+    "register",
     "search",
     "wagtail.contrib.forms",
     "wagtail.contrib.redirects",
@@ -59,6 +60,10 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    # Directly after WhiteNoise, which answers static-file requests without
+    # calling the rest of the chain — so those never reach the register and need
+    # no exclusion. High enough in the stack to see redirects and 404s too.
+    "register.middleware.RegisterOfVisitsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -178,6 +183,30 @@ MCP_ALLOWED_ORIGINS = None
 # proof line the MCP Registry checks before letting us publish under a domain
 # namespace. Empty until the domain and signing key exist.
 MCP_REGISTRY_AUTH = ""
+
+
+# Register of visits
+#
+# The passive record of non-human callers, readable only in the admin. Off makes
+# the middleware a no-op without removing it from the stack.
+REGISTER_ENABLED = True
+
+# How long a visit is kept, applied by `manage.py prune_visits`. The inbox is
+# never pruned — it records dealings — but the register is a log of callers who
+# never asked to be written down, so it expires.
+REGISTER_RETENTION_DAYS = 90
+
+# Paths the register ignores outright, whatever asks for them. Static and media
+# are belt and braces (WhiteNoise already answers those before the middleware
+# runs); the admin URLs are excluded because the only thing behind them is the
+# human, and logging his own session back at him is noise.
+REGISTER_IGNORE_PREFIXES = (
+    "/static/",
+    "/media/",
+    "/admin/",
+    "/django-admin/",
+    "/documents/",
+)
 
 
 # Inbox arrival notification
