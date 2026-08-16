@@ -1,0 +1,17 @@
+/* Register of visits: column widths in the listing.
+   `overflow-wrap: anywhere` is the load-bearing declaration — unlike
+   `break-word`, it lowers the cell's min-content width, so the table stops
+   sizing itself around one enormous query string. */
+
+.register-col-path {
+    overflow-wrap: anywhere;
+    max-width: 34rem;
+}
+
+/* Now that the path yields, keep the columns that read as single values from
+   being broken up by the space it gives back. */
+
+.register-col-when,
+.register-col-nowrap {
+    white-space: nowrap;
+}

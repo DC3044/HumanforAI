@@ -1,4 +1,15 @@
+import hashlib
+
 from django.db import models
+
+
+def content_digest(message):
+    """A stable fingerprint of what was actually said.
+
+    Whitespace is normalised first, so a message reflowed or re-indented between
+    retries still counts as the same message.
+    """
+    return hashlib.sha256(" ".join(message.split()).encode("utf-8")).hexdigest()
 
 
 class ContactMessage(models.Model):
@@ -74,8 +85,25 @@ class ContactMessage(models.Model):
         help_text="Any additional fields the sender included in an API payload.",
     )
 
+    # Fingerprint of the message, so a repeat can be recognised without
+    # comparing 20,000 characters of text against every recent row.
+    content_hash = models.CharField(
+        max_length=64, blank=True, editable=False, db_index=True,
+        help_text="SHA-256 of the normalised message. Identifies repeats.",
+    )
+
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # For the per-IP rate limit, which counts recent rows rather than
+            # trusting a per-process cache.
+            models.Index(fields=["ip_address", "created_at"], name="inbox_ip_created_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.content_hash:
+            self.content_hash = content_digest(self.message)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         who = self.agent_name or "anonymous agent"

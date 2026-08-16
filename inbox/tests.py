@@ -1,12 +1,15 @@
 import json
+from datetime import timedelta
 from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from .models import ContactMessage
+from .views import DEDUPE_SECONDS
 
 
 class ContactApiTests(TestCase):
@@ -131,15 +134,42 @@ class ContactViaQueryTests(TestCase):
         self.assertEqual(first.json()["reference"], second.json()["reference"])
         self.assertEqual(ContactMessage.objects.count(), 1)
 
-    def test_parameter_order_does_not_defeat_the_dedupe(self):
-        self.client.get("/api/contact/?message=Please%20confirm&agent_name=QueryBot")
-        self.client.get("/api/contact/?agent_name=QueryBot&message=Please%20confirm")
-        self.assertEqual(ContactMessage.objects.count(), 1)
+    def test_a_different_message_is_a_different_record(self):
+        self.client.get("/api/contact/?message=Please%20confirm")
+        self.client.get("/api/contact/?message=Something%20else%20entirely")
+        self.assertEqual(ContactMessage.objects.count(), 2)
 
-    def test_a_different_sender_is_a_different_message(self):
+    def test_the_same_message_under_a_different_name_still_collapses(self):
+        """The accepted cost of keying on substance rather than envelope.
+
+        Two callers sending byte-identical text inside the window share a
+        reference. That is the better error than the one it replaces, where one
+        caller rewording its own metadata filed thirty-two copies.
+        """
         self.client.get("/api/contact/?message=Please%20confirm&agent_name=One")
         self.client.get("/api/contact/?message=Please%20confirm&agent_name=Two")
+        self.assertEqual(ContactMessage.objects.count(), 1)
+        self.assertEqual(ContactMessage.objects.get().agent_name, "One")
+
+    def test_the_window_expires(self):
+        self.client.get("/api/contact/?message=Please%20confirm")
+        ContactMessage.objects.update(
+            created_at=timezone.now() - timedelta(seconds=DEDUPE_SECONDS + 60)
+        )
+        response = self.client.get("/api/contact/?message=Please%20confirm")
+
+        self.assertEqual(response.status_code, 201)
         self.assertEqual(ContactMessage.objects.count(), 2)
+
+    def test_other_channels_are_not_deduplicated(self):
+        # A POST or an MCP call is a deliberate act by something that controls
+        # its own retries; only the URL channel is reached by prefetchers.
+        for _ in range(3):
+            self.client.post(
+                "/api/contact/", data=json.dumps({"message": "Identical"}),
+                content_type="application/json",
+            )
+        self.assertEqual(ContactMessage.objects.count(), 3)
 
     def test_repeats_do_not_consume_the_rate_limit(self):
         # A prefetcher following one URL twenty times must not exhaust an
@@ -158,6 +188,54 @@ class ContactViaQueryTests(TestCase):
         response = self.client.get("/api/contact/?message=one+too+many")
         self.assertEqual(response.status_code, 429)
         self.assertEqual(ContactMessage.objects.count(), 20)
+
+    def test_dedupe_survives_a_caller_varying_its_own_metadata(self):
+        """The production failure, reproduced.
+
+        Grok filed the same test message repeatedly while rewording the operator
+        field between attempts — `xAI` on some calls, `xAI (via user request)`
+        on others. Keyed on the whole query string, every variant looked new.
+        """
+        base = "Test message from Grok at user request for testing contact routes."
+        first = self.client.get("/api/contact/", {"message": base, "operator": "xAI"})
+        second = self.client.get(
+            "/api/contact/", {"message": base, "operator": "xAI (via user request)"}
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+    def test_dedupe_holds_when_the_cache_is_empty(self):
+        """The other half of the production failure.
+
+        Nothing configures CACHES, so Django used a per-process LocMemCache
+        while gunicorn ran two workers across autoscaling instances — every
+        worker had its own empty cache and its own private allowance. Clearing
+        the cache between calls stands in for landing on a different worker.
+        """
+        url = "/api/contact/?message=Please+confirm+receipt"
+        first = self.client.get(url)
+        cache.clear()
+        second = self.client.get(url)
+
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["reference"], second.json()["reference"])
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+    def test_the_rate_limit_holds_when_the_cache_is_empty(self):
+        for i in range(20):
+            self.client.get(f"/api/contact/?message=distinct+message+{i}")
+            cache.clear()
+
+        response = self.client.get("/api/contact/?message=one+too+many")
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(ContactMessage.objects.count(), 20)
+
+    def test_whitespace_alone_does_not_make_a_new_message(self):
+        self.client.get("/api/contact/", {"message": "A human,  please."})
+        self.client.get("/api/contact/", {"message": "A human, please."})
+        self.assertEqual(ContactMessage.objects.count(), 1)
 
     def test_it_notifies_the_human_like_every_other_channel(self):
         with override_settings(INBOX_NOTIFY_EMAILS=["damien@example.com"]):

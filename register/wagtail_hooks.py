@@ -13,7 +13,10 @@ from datetime import timedelta
 
 import django_filters
 from django.db.models import Count, Max
+from django.templatetags.static import static
 from django.utils import timezone
+from django.utils.functional import cached_property
+from django.utils.html import format_html
 from wagtail import hooks
 from wagtail.admin.filters import WagtailFilterSet
 from wagtail.admin.views.generic import IndexView
@@ -31,6 +34,32 @@ SUMMARY_LIMIT = 12
 # dropdowns for free; these do not, and a free-text box for "operator" asks the
 # reader to already know what is in the table.
 DISCOVERED_FILTERS = ("agent", "operator", "method", "status_code")
+
+# Extra CSS classes put on the cells of particular columns, styled in
+# register-admin.css. A recorded path carries its whole query string and so is
+# one long unbreakable token; left alone it sets the width of the table and
+# squeezes every other column down to a word apiece.
+COLUMN_CLASSNAMES = {
+    "seen_at": "register-col-when",
+    "path": "register-col-path",
+    "kind": "register-col-nowrap",
+    "method": "register-col-nowrap",
+    "status_code": "register-col-nowrap",
+    "ip_address": "register-col-nowrap",
+}
+
+
+def _field_name(column):
+    """The model field a derived column reads.
+
+    Wagtail points a column at `get_FOO_display` when the field has choices, so
+    a column's own name is not always the field's — `kind` arrives here as
+    `get_kind_display`.
+    """
+    name = column.name
+    if name.startswith("get_") and name.endswith("_display"):
+        return name[len("get_") : -len("_display")]
+    return name
 
 
 def _values_seen(field):
@@ -69,6 +98,18 @@ class AgentVisitFilterSet(WagtailFilterSet):
 
 
 class RegisterIndexView(IndexView):
+    @cached_property
+    def columns(self):
+        # Tag the columns rather than declare them: Wagtail derives labels, sort
+        # keys and the linked title column from `list_display`, and all of that
+        # is worth keeping.
+        columns = super().columns
+        for column in columns:
+            extra = COLUMN_CLASSNAMES.get(_field_name(column))
+            if extra:
+                column.classname = f"{column.classname} {extra}".strip() if column.classname else extra
+        return columns
+
     def get_context_data(self, *args, **kwargs):
         context = super().get_context_data(*args, **kwargs)
 
@@ -138,3 +179,11 @@ agent_visit_viewset = AgentVisitViewSet("register")
 @hooks.register("register_admin_viewset")
 def register_agent_visit_viewset():
     return agent_visit_viewset
+
+
+@hooks.register("insert_global_admin_css")
+def register_admin_css():
+    return format_html(
+        '<link rel="stylesheet" href="{}">',
+        static("register/css/register-admin.css"),
+    )

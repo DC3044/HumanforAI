@@ -1,15 +1,15 @@
-import hashlib
 import json
+from datetime import timedelta
 
-from django.core.cache import cache
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .forms import ContactForm
-from .models import ContactMessage
+from .models import ContactMessage, content_digest
 from .throttle import client_ip, is_throttled
 
 MAX_FIELD = 500
@@ -111,15 +111,31 @@ def contact_thanks(request):
     return render(request, "inbox/thanks.html")
 
 
-def _dedupe_key(request):
-    """Identify a repeat of the same call, from the whole query rather than the
-    message alone — two messages that differ only in the name attached to them
-    are two messages."""
-    canonical = "&".join(
-        f"{name}={value}" for name, value in sorted(request.GET.lists())
+def _recent_duplicate(message):
+    """The record an identical message already made, if one is still in scope.
+
+    Keyed on the message alone. An earlier version hashed the whole query
+    string, on the theory that two messages differing only in the name attached
+    were two messages — which production disproved. A single agent retrying
+    varies its own metadata between attempts (`operator=xAI` one time,
+    `operator=xAI (via user request)` the next) while the message stays word for
+    word the same. Keying on the substance catches that; keying on the envelope
+    did not.
+
+    The cost is that two genuinely different callers sending byte-identical text
+    inside the window share a reference. For a contact inbox that is the better
+    error to make.
+    """
+    since = timezone.now() - timedelta(seconds=DEDUPE_SECONDS)
+    return (
+        ContactMessage.objects.filter(
+            source=ContactMessage.Source.QUERY,
+            content_hash=content_digest(message),
+            created_at__gte=since,
+        )
+        .order_by("created_at")
+        .first()
     )
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
-    return f"inbox-query-dedupe:{client_ip(request)}:{digest}"
 
 
 def contact_via_query(request):
@@ -134,20 +150,19 @@ def contact_via_query(request):
     resolves to the record the first one created, so the endpoint is at least
     idempotent in practice even though it is not safe.
     """
+    message = request.GET.get("message", "")
+
     # Ahead of the throttle on purpose. Repeats are the expected behaviour of
     # the things that reach this endpoint, and a prefetcher following the same
     # URL twenty times should not exhaust an hour's allowance to file one
     # message. A dedupe hit creates nothing, so answering it early is free.
-    key = _dedupe_key(request)
-    existing_id = cache.get(key)
-    if existing_id is not None:
-        existing = ContactMessage.objects.filter(pk=existing_id).first()
-        if existing is not None:
-            # 200 rather than 201: this call created nothing.
-            return _receipt(
-                existing, status=200,
-                note="This message was already on the record; here is its reference again.",
-            )
+    existing = _recent_duplicate(message)
+    if existing is not None:
+        # 200 rather than 201: this call created nothing.
+        return _receipt(
+            existing, status=200,
+            note="This message was already on the record; here is its reference again.",
+        )
 
     if is_throttled(request):
         return JsonResponse(
@@ -156,17 +171,12 @@ def contact_via_query(request):
         )
 
     params = request.GET.dict()
-    message = params.pop("message", "")
+    params.pop("message", None)
     known = {field: _clip(params.pop(field, "")) for field in KNOWN_FIELDS}
 
     msg = ContactMessage(message=message[:MAX_MESSAGE], extra=params, **known)
     capture_meta(request, msg, ContactMessage.Source.QUERY)
     msg.save()
-
-    # Best-effort, like the throttle it sits beside: with a per-process cache
-    # across several Cloud Run instances a duplicate can still slip through.
-    # Filing the same message twice is a far smaller problem than refusing it.
-    cache.set(key, msg.pk, DEDUPE_SECONDS)
 
     return _receipt(msg)
 
