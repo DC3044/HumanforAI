@@ -11,6 +11,12 @@ ALLOWED_HOSTS = ["*"]
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
+# Write visits through immediately instead of batching them. Batching exists to
+# let a serverless database sleep, which is a production concern and a nuisance
+# locally: a request you just made should appear in the admin while you are
+# looking at it. A batch of one is the same code path with no waiting.
+REGISTER_FLUSH_ROWS = 1
+
 
 try:
     from .local import *

@@ -1,12 +1,15 @@
+import time
 from datetime import timedelta
 from io import StringIO
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from . import buffer
 from .detect import Kind, Reason, _fallback_name, identify, looks_like_a_browser
 from .models import AgentVisit
 
@@ -15,6 +18,23 @@ BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 CLAUDEBOT_UA = "Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)"
+
+
+class RegisterTestCase(TestCase):
+    """Base for tests that make requests.
+
+    The visit buffer is module-level state, so unlike the database it is not
+    rolled back between tests — a test that deliberately leaves something queued
+    would otherwise have it flushed by whichever test ran next.
+    """
+
+    def setUp(self):
+        super().setUp()
+        buffer._pending.clear()
+
+    def tearDown(self):
+        buffer._pending.clear()
+        super().tearDown()
 
 
 class IdentifyTests(TestCase):
@@ -87,7 +107,7 @@ class FallbackNameTests(TestCase):
         self.assertEqual(_fallback_name(""), "(no user agent)")
 
 
-class BrowserPresumptionTests(TestCase):
+class BrowserPresumptionTests(RegisterTestCase):
     """The gate on ordinary pages: presume human, record everything else.
 
     The pattern table names callers; it does not decide whether they count.
@@ -158,7 +178,7 @@ class BrowserPresumptionTests(TestCase):
         self.assertEqual(visit.kind, Kind.CRAWLER)
 
 
-class IgnoredAgentTests(TestCase):
+class IgnoredAgentTests(RegisterTestCase):
     def test_self_monitoring_is_not_recorded_even_on_an_agent_surface(self):
         # The case that prompted this: Cloud Monitoring POSTs to /mcp, which the
         # surface rule would otherwise record once a minute forever.
@@ -180,7 +200,7 @@ class IgnoredAgentTests(TestCase):
         self.assertTrue(AgentVisit.objects.exists())
 
 
-class MiddlewareTests(TestCase):
+class MiddlewareTests(RegisterTestCase):
     def test_records_a_recognised_agent(self):
         response = self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
 
@@ -253,19 +273,110 @@ class MiddlewareTests(TestCase):
 
     def test_a_failing_write_does_not_break_the_response(self):
         with mock.patch(
-            "register.middleware.AgentVisit.objects.create",
+            "register.models.AgentVisit.objects.bulk_create",
             side_effect=RuntimeError("database is on fire"),
+        ):
+            with self.assertLogs("register.buffer", level="ERROR"):
+                response = self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(AgentVisit.objects.exists())
+        # Re-queued rather than discarded: a failed flush usually means the
+        # database blinked, not that these rows are bad.
+        self.assertEqual(buffer.pending(), 1)
+
+    def test_the_middleware_still_swallows_its_own_errors(self):
+        with mock.patch(
+            "register.middleware.should_record", side_effect=RuntimeError("boom")
         ):
             with self.assertLogs("register.middleware", level="ERROR"):
                 response = self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(AgentVisit.objects.exists())
 
     @override_settings(REGISTER_ENABLED=False)
     def test_disabled_records_nothing(self):
         self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
         self.assertFalse(AgentVisit.objects.exists())
+
+
+@override_settings(REGISTER_FLUSH_ROWS=1000, REGISTER_FLUSH_SECONDS=99_999)
+class BufferTests(RegisterTestCase):
+    """Batching, which exists so a serverless database can suspend.
+
+    Serving an agent is otherwise free of the database entirely — /mcp and
+    /llms.txt are zero queries — so writing per request was the only thing
+    keeping it awake, and the only thing being billed for.
+    """
+
+    def test_visits_wait_in_memory_rather_than_hitting_the_database(self):
+        # /llms.txt is the shape of traffic this exists for: serving it costs
+        # no queries at all, so the register was the only reason the database
+        # woke up. Under batching it stays asleep.
+        with self.assertNumQueries(0):
+            self.client.get("/llms.txt", HTTP_USER_AGENT=CLAUDEBOT_UA)
+
+        self.assertEqual(buffer.pending(), 1)
+        self.assertFalse(AgentVisit.objects.exists())
+
+    def test_a_full_batch_is_written(self):
+        with override_settings(REGISTER_FLUSH_ROWS=3):
+            for i in range(3):
+                self.client.get(f"/page-{i}/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+
+        self.assertEqual(buffer.pending(), 0)
+        self.assertEqual(AgentVisit.objects.count(), 3)
+
+    def test_an_elapsed_interval_is_written(self):
+        with override_settings(REGISTER_FLUSH_SECONDS=0):
+            self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+
+        self.assertEqual(AgentVisit.objects.count(), 1)
+
+    def test_an_elapsed_interval_with_nothing_waiting_writes_nothing(self):
+        # A browser on an ordinary page queues nothing, and an elapsed interval
+        # alone must not send an empty batch at a sleeping database.
+        with override_settings(REGISTER_FLUSH_SECONDS=0):
+            with mock.patch("register.models.AgentVisit.objects.bulk_create") as write:
+                self.client.get("/about/", HTTP_USER_AGENT=BROWSER_UA)
+
+        write.assert_not_called()
+
+    def test_shutdown_writes_what_is_waiting(self):
+        # Registered with atexit, so this is what a Cloud Run SIGTERM runs.
+        self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+        self.assertFalse(AgentVisit.objects.exists())
+
+        self.assertEqual(buffer.flush(), 1)
+        self.assertEqual(AgentVisit.objects.count(), 1)
+
+    def test_seen_at_is_the_moment_of_the_visit_not_of_the_flush(self):
+        """The trap in batching, pinned.
+
+        `auto_now_add` stamps a row when it reaches the database, and
+        `bulk_create` honours it — so under batching every visit in a group
+        would claim to have happened at the flush, up to half an hour late. The
+        field uses a default instead, evaluated when the instance is built.
+        """
+        self.client.get("/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+        happened_at = buffer._pending[0].seen_at
+
+        time.sleep(0.05)
+        buffer.flush()
+
+        self.assertEqual(AgentVisit.objects.get().seen_at, happened_at)
+
+    def test_the_buffer_is_bounded_when_flushes_keep_failing(self):
+        with override_settings(REGISTER_BUFFER_MAX=3):
+            with self.assertLogs("register.buffer", level="WARNING"):
+                for i in range(6):
+                    self.client.get(f"/page-{i}/", HTTP_USER_AGENT=CLAUDEBOT_UA)
+
+        self.assertEqual(buffer.pending(), 3)
+        # The oldest go first, so what survives is the most recent.
+        self.assertEqual(
+            [v.path for v in buffer._pending], ["/page-3/", "/page-4/", "/page-5/"]
+        )
 
 
 class LabelTests(TestCase):
@@ -312,9 +423,24 @@ class PruneVisitsTests(TestCase):
         self._run()
         self.assertEqual(AgentVisit.objects.count(), 2)
 
+    def test_the_shipped_retention_is_the_measured_one(self):
+        # Pinned because it is a capacity decision, not a taste one: ~100 calls
+        # an hour at ~440 bytes a row settles near 35 MB at thirty days and
+        # 110 MB at ninety. Changing it changes the database bill.
+        self.assertEqual(settings.REGISTER_RETENTION_DAYS, 30)
 
-class AdminTests(TestCase):
+    def test_it_is_cheap_when_there_is_nothing_to_delete(self):
+        # This runs at container start, so its cost on the common path — an
+        # instance recycling minutes after the last one pruned — is the thing
+        # that matters. Two queries, no scan of the table.
+        self._run("--days", "365")
+        with self.assertNumQueries(2):
+            self._run("--days", "365")
+
+
+class AdminTests(RegisterTestCase):
     def setUp(self):
+        super().setUp()
         self.user = get_user_model().objects.create_superuser(
             username="human", email="human@example.com", password="password",
         )

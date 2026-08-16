@@ -305,14 +305,97 @@ rows link through to that caller's own entries, and the whole register exports
 to CSV, raw user agent included, since the derived reading is only ever an
 interpretation of it.
 
+### Keeping it bounded
+
 Unlike the inbox — which records dealings and is never pruned — the register is
-telemetry about callers who did not ask to be written down, so it expires:
+telemetry about callers who did not ask to be written down, so it expires.
+
+**`prune_visits` runs at container start**, in the Dockerfile `CMD` next to
+`migrate`. A Cloud Run Job on Cloud Scheduler is the correct home for it and one
+more piece of infrastructure to create, authorise and remember; Cloud Run
+recycles instances often enough that boot is a serviceable clock. The command is
+two queries when there is nothing to delete, which is asserted by a test, since
+that is its cost on every cold start. Unlike the migration it cannot stop the
+container: expiring old telemetry is housekeeping, and the site comes up whether
+or not it worked.
+
+By hand:
 
 ```sh
-uv run manage.py prune_visits              # uses REGISTER_RETENTION_DAYS (90)
-uv run manage.py prune_visits --days 30
+uv run manage.py prune_visits              # uses REGISTER_RETENTION_DAYS (30)
+uv run manage.py prune_visits --days 7
 uv run manage.py prune_visits --dry-run
 ```
+
+**Retention is thirty days, and that number is a capacity decision.** Measured
+on early production traffic: about a hundred calls an hour, and roughly 440
+bytes a row once the four indexes are counted, with `user_agent` the largest
+column by some distance. Thirty days settles near 35 MB; ninety would have
+reached 110 MB against a half-gigabyte database. Anything worth keeping longer
+should be exported to CSV before it expires.
+
+Two things worth knowing before this grows:
+
+- **`path` is deliberately unindexed.** `AgentVisit` is not registered with
+  Wagtail search, so the admin search box falls back to `path__icontains`, which
+  no btree index can serve, and nothing filters or orders on an exact path. The
+  index it used to carry was about 14% of the table's total footprint and bought
+  nothing.
+- **Storage is not what constrains this; compute is.** See below.
+
+Measure the real thing any time:
+
+```sql
+SELECT pg_size_pretty(pg_total_relation_size('register_agentvisit'));
+```
+
+### Why visits are batched
+
+Bytes were never the binding constraint. **Compute was**, and the register was
+the entire cause of it. Measured queries per request:
+
+| Request | Register off | Register on |
+|---|---|---|
+| `POST /mcp` | **0** | 1 |
+| `GET /llms.txt`, `/robots.txt`, `/terms.md` | **0** | 1 |
+| `GET /about/` | 1 | 2 |
+| `GET /` | 4 | 6 |
+
+Serving an agent costs no database at all — `/mcp` is where nearly all of this
+site's traffic goes, and it is zero queries. The register turned that into one
+write per request, and on a Postgres that suspends after five minutes idle, a
+write every thirty seconds means it never suspends. The first fortnight burned
+12.9 CU-hours in two days against a hundred-hour monthly allowance: 0.25 CU ×
+24 h, a database awake around the clock to record that nothing much happened.
+
+Every wake costs the five-minute minimum, so the budget works out to roughly
+**one database wake every nine minutes, sustained**. `register/buffer.py` holds
+visits in memory and writes them in batches — a full batch, an elapsed interval,
+or process shutdown via `atexit`, which is what a Cloud Run `SIGTERM` runs. In a
+250-request simulation on a zero-query path that is **two wakes instead of 250**.
+
+Two consequences worth knowing:
+
+- **Visits buffered when an instance dies are lost.** That is acceptable here
+  and nowhere else in this project. The register is telemetry that already
+  expires on a schedule; the inbox is the record, is written through
+  immediately, and must never be batched. Losing a row that says a crawler
+  passed by is proportionate; losing a message is not.
+- **`seen_at` uses `default=timezone.now`, not `auto_now_add`.** This is the
+  trap in batching. `auto_now_add` stamps a row when it reaches the database,
+  and `bulk_create` honours it — so every visit in a batch would claim to have
+  happened at the flush, up to half an hour late. A default is evaluated when
+  the instance is built, which is the moment of the visit. There is a test
+  pinning it.
+
+Development sets `REGISTER_FLUSH_ROWS = 1`, so a request you just made appears
+in the admin while you are looking at it. Production reads both thresholds from
+the environment, since they are a cost dial and turning one should not need a
+rebuild.
+
+Ignoring the uptime checks matters for the same reason and independently of
+batching: a probe once a minute is a guarantee of never suspending, whatever
+else the traffic does.
 
 Set `REGISTER_ENABLED=0` to stop recording without touching the middleware
 stack. The Privacy & Data Notice describes the register at section 2.1; edit

@@ -40,5 +40,15 @@ EXPOSE 8080
 
 # Cloud Run sets $PORT. Migrating at boot is not best practice for a busy
 # multi-instance service, but is the pragmatic choice for this one.
+#
+# The register's retention runs here too, for the same reason: a Cloud Run Job
+# on Cloud Scheduler is the correct home for it, and one more piece of
+# infrastructure to create, authorise and remember. Cloud Run recycles instances
+# often enough that boot is a serviceable clock, and the command is cheap when
+# there is nothing to delete — an indexed count that returns zero.
+#
+# Unlike the migration it is not allowed to stop the container: expiring old
+# telemetry is housekeeping, and the site must come up whether or not it worked.
 CMD python manage.py migrate --noinput && \
+    { python manage.py prune_visits || echo "prune_visits failed; serving anyway"; } && \
     gunicorn humanforai.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 60

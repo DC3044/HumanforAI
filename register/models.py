@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 from .detect import Kind, Reason
 
@@ -15,7 +16,13 @@ class AgentVisit(models.Model):
     record of dealings, and `manage.py prune_visits` keeps it bounded.
     """
 
-    seen_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    # `default` rather than `auto_now_add`, because visits are buffered and
+    # written in batches. auto_now_add stamps the row when it reaches the
+    # database, which under batching is the flush — so every visit in a batch
+    # would claim to have happened at the same moment, up to half an hour after
+    # it did. A default is evaluated when the instance is constructed, which is
+    # the moment of the visit.
+    seen_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     # Who, as far as anyone can tell. Derived from the user agent, which the
     # caller supplies and could have made up.
@@ -35,8 +42,12 @@ class AgentVisit(models.Model):
 
     # What was asked for.
     method = models.CharField(max_length=10)
+    # Deliberately unindexed. This model is not registered with Wagtail search,
+    # so the admin's search box falls back to `path__icontains`, which a btree
+    # index cannot serve — and nothing filters or orders on an exact path. The
+    # index was about 14% of the table's total footprint and bought nothing.
     path = models.CharField(
-        max_length=500, db_index=True,
+        max_length=500,
         help_text="Requested path including any query string.",
     )
     status_code = models.PositiveSmallIntegerField(null=True, blank=True)

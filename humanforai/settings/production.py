@@ -14,7 +14,9 @@ Everything sensitive or deployment-specific comes from environment variables:
                         /.well-known/mcp-registry-auth, for domain-based
                         publishing to the MCP Registry (optional)
   REGISTER_ENABLED      "0" to stop recording visits; anything else records
-  REGISTER_RETENTION_DAYS  how long a visit is kept (default 90)
+  REGISTER_RETENTION_DAYS  how long a visit is kept (default 30)
+  REGISTER_FLUSH_ROWS   visits buffered before a batch is written (default 100)
+  REGISTER_FLUSH_SECONDS  longest a visit waits to be written (default 1800)
 """
 
 import os
@@ -105,7 +107,14 @@ MCP_REGISTRY_AUTH = os.environ.get("MCP_REGISTRY_AUTH", "")
 # Register of visits. On by default; set REGISTER_ENABLED=0 to stop recording
 # without a redeploy of the middleware stack.
 REGISTER_ENABLED = os.environ.get("REGISTER_ENABLED", "1") != "0"
-REGISTER_RETENTION_DAYS = int(os.environ.get("REGISTER_RETENTION_DAYS", "90"))
+REGISTER_RETENTION_DAYS = int(os.environ.get("REGISTER_RETENTION_DAYS", "30"))
+
+# Batching thresholds, from the environment because they are a compute-cost
+# dial on a serverless database and wanting to turn one mid-month should not
+# require a rebuild. Larger values mean fewer wakes and more visits at risk if
+# an instance dies. See register/buffer.py.
+REGISTER_FLUSH_ROWS = int(os.environ.get("REGISTER_FLUSH_ROWS", "100"))
+REGISTER_FLUSH_SECONDS = int(os.environ.get("REGISTER_FLUSH_SECONDS", "1800"))
 
 
 # Inbox arrival notification.

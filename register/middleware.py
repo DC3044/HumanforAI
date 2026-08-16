@@ -15,12 +15,14 @@ import logging
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_ipv46_address
+from django.utils import timezone
 
 # The Cloud Run X-Forwarded-For handling is already solved once, for the inbox's
 # throttle. A second implementation would be a second thing to get wrong when
 # the hop count changes.
 from inbox.throttle import client_ip
 
+from . import buffer
 from .detect import should_record
 from .models import AgentVisit
 
@@ -68,7 +70,12 @@ class RegisterOfVisitsMiddleware:
         if sighting is None:
             return None
 
-        return AgentVisit.objects.create(
+        visit = AgentVisit(
+            # Explicit, though the field default would give the same answer.
+            # Under batching the difference between "when it happened" and
+            # "when it was written" is up to half an hour, and this is the one
+            # column where that matters.
+            seen_at=timezone.now(),
             agent=sighting.agent,
             operator=sighting.operator,
             kind=sighting.kind,
@@ -80,3 +87,6 @@ class RegisterOfVisitsMiddleware:
             ip_address=_safe_ip(request),
             referer=request.META.get("HTTP_REFERER", "")[:500],
         )
+        # Queued, not written. See buffer.py for why, and for what it costs.
+        buffer.add(visit)
+        return visit

@@ -194,7 +194,13 @@ REGISTER_ENABLED = True
 # How long a visit is kept, applied by `manage.py prune_visits`. The inbox is
 # never pruned — it records dealings — but the register is a log of callers who
 # never asked to be written down, so it expires.
-REGISTER_RETENTION_DAYS = 90
+#
+# Thirty days rather than ninety, on measurement: early traffic runs around a
+# hundred calls an hour, and at roughly 440 bytes a row (user agents dominate)
+# ninety days would settle near 110 MB against a half-gigabyte database. Thirty
+# holds it near 35 MB, and anything worth keeping longer can be exported from
+# the admin before it expires.
+REGISTER_RETENTION_DAYS = 30
 
 # Paths the register ignores outright, whatever asks for them. Static and media
 # are belt and braces (WhiteNoise already answers those before the middleware
@@ -223,6 +229,26 @@ REGISTER_IGNORE_AGENTS = (
     r"UptimeRobot",
     r"Pingdom",
 )
+
+# Batching. Visits are held in memory and written in groups, because serving an
+# agent otherwise costs no database at all: /mcp, /llms.txt, /robots.txt and
+# /terms.md are zero queries each, and the register was what turned that traffic
+# into a write per request.
+#
+# The arithmetic that chose these numbers: the database suspends after five
+# minutes idle, so every wake costs at least five minutes of compute. A flush
+# every thirty minutes is ~48 wakes a day, about four compute-hours rather than
+# twenty-four — roughly 30 CU-hours a month against a 100-hour allowance.
+# Writing per request kept it awake permanently, which is 180.
+#
+# Whichever comes first: a full batch, or an interval elapsed with anything
+# waiting. See register/buffer.py for what a lost buffer costs.
+REGISTER_FLUSH_ROWS = 100
+REGISTER_FLUSH_SECONDS = 1800
+
+# Ceiling on the buffer if flushes keep failing. Old visits are dropped in
+# preference to growing without limit inside a container with a memory cap.
+REGISTER_BUFFER_MAX = 2000
 
 
 # Inbox arrival notification
