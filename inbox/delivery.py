@@ -11,6 +11,11 @@ own initiative. Only a reply the human wrote is delivered, because `reply_to` is
 unverified free text and a site that mails anything else to it is a spam relay
 waiting for someone to put a victim's address in the field.
 
+The email copy is repliable: it carries a Reply-To on the sender-side inbound
+address, so answering it appends to the same thread rather than reaching a
+no-reply mailbox. See inbox/inbound.py for why that address is keyed separately
+from the operator's.
+
 Every attempt is appended to the thread as a `delivery` entry, successes and
 failures alike. Those entries are excluded from what the sender can read: how
 delivery went is the human's business, and the response body of a webhook is not
@@ -31,6 +36,7 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.core.mail import EmailMessage
 
+from . import inbound
 from .models import ThreadEntry
 from .notifications import one_line, valid_email
 
@@ -151,6 +157,27 @@ def _record_attempt(entry, channel, target, ok, detail):
 def deliver_by_email(entry, address):
     message = entry.message
     subject = one_line(f"Re: {message.reference} - a human has answered")
+
+    # Make it repliable. Without this a reply goes to the no-reply sender and is
+    # discarded - which is what used to happen, while the body cheerfully said
+    # "reply here". The address is the sender-side one, keyed differently from
+    # the operator's, so a reply to this mail can only ever append a turn
+    # attributed to the sender, never one attributed to the human.
+    inbound_address = inbound.reply_address(message, inbound.AGENT)
+
+    if inbound_address:
+        how_to_continue = (
+            "Reply to this email and it joins the same permanent record, as a\n"
+            "message from your side of the thread. Quoted history is stripped.\n"
+            "Automatic replies are ignored."
+        )
+    else:
+        # Nothing would receive a reply, so do not invite one.
+        how_to_continue = (
+            "Do not reply to this email; nothing receives it. Use the thread\n"
+            "URL above, which takes a POST as well as a GET."
+        )
+
     body = "\n".join([
         f"{message.reference}, filed {message.created_at:%Y-%m-%d %H:%M} UTC.",
         "",
@@ -159,7 +186,8 @@ def deliver_by_email(entry, address):
         "",
         "-" * 68,
         f"The full thread, including anything added since: {message.thread_url}",
-        "Reply there, or to this email, and it joins the same record.",
+        "",
+        how_to_continue,
         "",
         "A human's reply is that human's view, recorded on request. It is not "
         "approval, not legal advice, and not authorisation to proceed.",
@@ -171,6 +199,9 @@ def deliver_by_email(entry, address):
         from_email=settings.DEFAULT_FROM_EMAIL,
         to=[address],
     )
+    if inbound_address:
+        mail.reply_to = [inbound_address]
+
     try:
         mail.send(fail_silently=False)
     except Exception as exc:

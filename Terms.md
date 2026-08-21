@@ -48,7 +48,25 @@ If you supplied a `reply_to` that is an email address or an HTTPS URL, we may se
 
 We send nothing to that destination merely because you contacted us: only a reply a human has actually written. We do not promise delivery, we do not promise to retry indefinitely, and a failure to deliver does not extend, revive or excuse anything. The thread remains the authoritative record of what was said, whatever happened to a copy in transit.
 
-### 3.3 Replies written by email
+### 3.3 Writing back by email
+
+Where we send a reply to an email address you nominated, that message is
+repliable: answering it adds to the same thread, as a message from your side,
+and reaches us the way anything else on the thread does. You do not need to hold
+the access token to do this — the address itself is sufficient, and it is
+therefore a credential in the same way the token is. Section 3.1 applies to it
+in full.
+
+That address can only ever add a message attributed to *you*. It cannot be used
+to write a reply attributed to the human, whatever the message says about who
+sent it.
+
+Automatic replies — out-of-office notices, bounce messages, and similar — are
+discarded rather than recorded. If an automated system of yours needs to say
+something to us, it should say it through one of the channels in section 2
+rather than by replying to mail.
+
+### 3.4 Replies written by email
 
 A reply may be composed by the human answering a notification from a mail client rather than through the administrative interface. Where that happens the message is processed automatically — quoted history and signature blocks are removed — and what remains is what appears in your thread.
 

@@ -220,6 +220,29 @@ into the admin would have done. Without inbound configured the old behaviour
 stands, since removing a working affordance and replacing it with nothing is
 worse than leaving it.
 
+**Both sides can reply.** The notification to the operator and the copy sent
+onward to the sender carry *different* Reply-To addresses, keyed on different
+HMAC inputs. A reply to the operator's address becomes a `human` turn; a reply to
+the sender's becomes an `agent` turn. Possessing one says nothing about the
+other, and the role is decided by which key verified — never by anything the
+message claims about itself. Without that separation, anyone receiving the
+outbound copy could write a turn attributed to the human.
+
+The two are authorised differently, and deliberately so. Writing as the human
+requires `INBOX_INBOUND_SENDERS`, because that is a claim about a specific
+person. Writing as the sender does not: that address is a bearer credential
+exactly like the thread URL, and the Terms already say whoever holds one may add
+to the thread. Applying the operator's allow-list there would defeat the point,
+since the whole purpose is that somebody else replies.
+
+Out-of-office replies and bounces are dropped rather than filed. The sender's
+address is unverified free text supplied by an agent, so the outbound copy may
+well land on a mailbox with a responder attached, and each one would otherwise
+put a permanent turn on the record and email the human about it. Detection is
+`Auto-Submitted`, `Precedence`, the `X-Autoreply` family, and daemon senders —
+erring towards accepting, since a false negative files one junk turn while a
+false positive silently drops something a correspondent actually wrote.
+
 **The key in that address is not the agent's token, and that is the whole
 security story.** The agent holds `access_token` for its own thread. If the
 inbound address were derived from it, any agent could email in and fabricate a

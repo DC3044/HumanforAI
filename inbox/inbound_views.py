@@ -120,7 +120,7 @@ def verify_signature(headers, body):
 
 
 def fetch_body(email_id):
-    """The text and HTML parts of a received email, from the Resend API.
+    """The text, HTML and headers of a received email, from the Resend API.
 
     Raises on failure rather than returning empty, because the caller has to
     tell "the human wrote nothing" apart from "we could not find out what the
@@ -190,7 +190,12 @@ def fetch_body(email_id):
     # Resend has returned the object bare in some versions and wrapped in
     # `data` in others; accept either rather than break on a shape change.
     body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    return body.get("text") or "", body.get("html") or ""
+    headers = body.get("headers")
+    return (
+        body.get("text") or "",
+        body.get("html") or "",
+        headers if isinstance(headers, dict) else {},
+    )
 
 
 def _accepted(note, **extra):
@@ -244,12 +249,25 @@ def inbound_mail(request):
     recipients = data.get("to") or []
     if isinstance(recipients, str):
         recipients = [recipients]
-    message = inbound.thread_for_address(" ".join(str(r) for r in recipients))
+    # `received_for` is the address the message was actually delivered to, which
+    # survives forwarding and aliasing better than the To header. Both are
+    # offered; only one of them will carry a key that verifies.
+    for_addresses = data.get("received_for") or []
+    if isinstance(for_addresses, str):
+        for_addresses = [for_addresses]
+    candidates = " ".join(str(r) for r in list(for_addresses) + list(recipients))
+
+    message, role = inbound.thread_for_address(candidates)
     if message is None:
         return _refused("no thread matches the recipient address")
 
     sender = data.get("from", "")
-    if not inbound.sender_allowed(sender):
+
+    # Writing as the human is a claim about a specific person, so it needs the
+    # allow-list. Writing as the sender is not: that address is a bearer
+    # credential exactly like the thread URL, and the Terms already say whoever
+    # holds one may add to the thread.
+    if role == inbound.HUMAN and not inbound.sender_allowed(sender):
         logger.warning(
             "Inbound mail for %s from unauthorised sender %r",
             message.reference, str(sender)[:200],
@@ -261,11 +279,21 @@ def inbound_mail(request):
         return _refused("event carried no email id", reference=message.reference)
 
     try:
-        text, html = fetch_body(email_id)
+        text, html, headers = fetch_body(email_id)
     except RuntimeError as exc:
         # The one case that must not be answered 200. The human wrote a reply
         # and it is sitting in Resend; a retry can still recover it.
         return _try_again(f"could not retrieve the body of {email_id}: {exc}")
+
+    # An out-of-office or a bounce is not a turn in the conversation. This
+    # matters most on the sender's side, where the address came from an agent
+    # and may well have a responder attached to it.
+    if inbound.is_automated(headers, sender):
+        logger.info(
+            "Ignoring an automated message addressed to %s (%s)",
+            message.reference, str(sender)[:120],
+        )
+        return _accepted("ignored: automated message", reference=message.reference)
 
     # The text part is what almost every client sends. The HTML part is a
     # fallback for those that send only that, and is flattened first or the
@@ -275,13 +303,16 @@ def inbound_mail(request):
     entry = inbound.record_reply(
         message,
         body,
+        role=role,
         sender=sender,
         subject=data.get("subject", ""),
-        raw={"provider": "resend", "email_id": email_id},
+        raw={"provider": "resend", "email_id": email_id, "role": role},
     )
     if entry is None:
         return _refused("nothing to record once quoting was stripped",
                         reference=message.reference)
 
-    logger.info("Inbound reply recorded on %s", message.reference)
-    return _accepted("reply recorded", reference=message.reference)
+    logger.info(
+        "Inbound %s turn recorded on %s", role, message.reference
+    )
+    return _accepted("reply recorded", reference=message.reference, role=role)

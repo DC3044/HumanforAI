@@ -101,7 +101,9 @@ Service providers may process information only for the purposes for which they a
 
 Notifications to the operator, replies sent to a nominated destination, and replies composed by the operator answering a notification are all carried by a third-party email provider, which processes the contents of those messages in order to deliver them. Where the operator answers by email, the reply passes through that provider before being recorded.
 
-An incoming reply is accepted only when it is addressed to the per-thread address issued for that request and comes from an address on a configured list. Messages failing either test are refused and not recorded, though the fact of the attempt appears in technical logs.
+Each request has two per-thread email addresses: one issued to the operator, on which a message is recorded as the operator's reply, and one issued with the copy sent to the sender, on which a message is recorded as coming from the sender's side. They are separately derived, and neither can be used in place of the other.
+
+An incoming message is accepted only when it is addressed to one of those two addresses. A message on the operator's address is additionally accepted only from an address on a configured list; a message on the sender's address is accepted from any sender, because that address is itself the credential — see section 2.2. Messages failing these tests are refused and not recorded, though the fact of the attempt appears in technical logs. Automatic replies and bounce messages are identified and discarded rather than recorded.
 
 ### 6.2 Replies sent to a nominated destination
 

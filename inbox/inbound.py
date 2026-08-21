@@ -22,6 +22,18 @@ record — a worse failure than having no inbound channel at all. So the key is 
 HMAC over a server-side secret the agent never sees, and the two credentials have
 nothing to do with each other.
 
+**Each side of the conversation gets its own address.** The human's notification
+and the sender's copy of a reply carry different Reply-To addresses, keyed on
+different HMAC inputs. That is what stops a recipient of the outbound copy from
+writing a turn attributed to the human: possessing one address says nothing
+about the other, and the role is decided by which key matched, never by anything
+the message claims about itself.
+
+The two roles are also authorised differently. Writing as the human requires the
+sender allow-list, because that is a claim about a specific person. Writing as
+the sender does not: that address is a bearer credential exactly like the thread
+URL, and the Terms already say that whoever holds one may add to the thread.
+
 Authenticity rests on three independent things: the provider's signature on
 the webhook (see inbox/inbound_views.py), the per-thread key in the recipient
 address, and an allow-list of sender addresses. The signature is the strong
@@ -49,6 +61,15 @@ ADDRESS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Which side of the conversation an address belongs to.
+HUMAN = "human"
+AGENT = "agent"
+
+# The HMAC label per role. HUMAN is the bare "inbound:" form deliberately: it is
+# what was already issued in notifications before the sender's side existed, and
+# changing it would silently break every reply address in an inbox somewhere.
+_ROLE_LABELS = {HUMAN: "inbound", AGENT: "inbound-agent"}
+
 
 def _secret():
     return getattr(settings, "INBOX_INBOUND_SECRET", "") or ""
@@ -64,23 +85,32 @@ def is_configured():
     return bool(_secret() and getattr(settings, "INBOX_INBOUND_DOMAIN", ""))
 
 
-def address_key(reference):
-    """The per-thread key embedded in a reply address.
+def address_key(reference, role=HUMAN):
+    """The per-thread, per-role key embedded in a reply address.
 
     Keyed on INBOX_INBOUND_SECRET, which is server-side and never handed out.
     Deliberately *not* derived from the thread's `access_token`: that value is
     given to the agent, and an agent able to compute its own inbound address
     could post a reply attributed to the human onto its own record.
+
+    The role goes into the HMAC input rather than into the address text, so the
+    two keys for one thread are unrelated and holding one reveals nothing about
+    the other. It also means the address cannot be edited into the other role.
     """
+    label = _ROLE_LABELS[role]
     return hmac.new(
         _secret().encode("utf-8"),
-        f"inbound:{reference.upper()}".encode("utf-8"),
+        f"{label}:{reference.upper()}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()[:KEY_LENGTH]
 
 
-def reply_address(message):
-    """Where a reply to this thread's notification should be sent, or "".
+def reply_address(message, role=HUMAN):
+    """Where a reply to this thread should be sent, or "".
+
+    `role` says who the reply will be attributed to: HUMAN for the notification
+    sent to the operator, AGENT for the copy sent onward to whoever filed the
+    request.
 
     Empty when inbound mail is not configured, which callers read as "fall back
     to whatever you did before".
@@ -88,35 +118,40 @@ def reply_address(message):
     if not is_configured():
         return ""
     domain = settings.INBOX_INBOUND_DOMAIN.strip().lstrip("@")
-    return f"{message.reference.lower()}.{address_key(message.reference)}@{domain}"
+    key = address_key(message.reference, role)
+    return f"{message.reference.lower()}.{key}@{domain}"
 
 
 def thread_for_address(raw):
-    """The ContactMessage a recipient address names, or None.
+    """The (ContactMessage, role) a recipient address names, or (None, None).
 
     `raw` is whatever the mail server reported as the recipient, which may be a
     bare address, a display-name form, or several of them. Every candidate is
     tried, because a reply may be addressed to more than one place and only one
     of them is ours.
+
+    The role comes from which key matched. Nothing the message says about itself
+    is consulted, so a sender cannot elect to be the human by claiming to be.
     """
     if not is_configured() or not raw:
-        return None
+        return None, None
 
     for match in ADDRESS_RE.finditer(str(raw)):
         reference = match.group("reference").upper()
-        # Constant-time: the key is a secret being checked against a value that
-        # an unauthenticated request supplied.
-        if not hmac.compare_digest(
-            address_key(reference), match.group("key").lower()
-        ):
-            continue
-        message = ContactMessage.objects.filter(
-            pk=int(reference.split("-")[1])
-        ).first()
-        if message is not None:
-            return message
+        supplied = match.group("key").lower()
 
-    return None
+        for role in (HUMAN, AGENT):
+            # Constant-time: the key is a secret being checked against a value
+            # that an unauthenticated request supplied.
+            if not hmac.compare_digest(address_key(reference, role), supplied):
+                continue
+            message = ContactMessage.objects.filter(
+                pk=int(reference.split("-")[1])
+            ).first()
+            if message is not None:
+                return message, role
+
+    return None, None
 
 
 # --- Working out what the human actually wrote ------------------------------
@@ -220,6 +255,40 @@ def strip_quoted(text):
     return "\n".join(kept).strip()
 
 
+# Headers that mean "a machine sent this", per RFC 3834 and long practice.
+# Worth filtering because the sender's address is unverified free text supplied
+# by an agent, so the outbound copy may well land on a mailbox with a vacation
+# responder or a bounce handler attached — and every one of those would file a
+# permanent "the sender wrote again" turn and email the human about it.
+_AUTOMATED_FROM = ("mailer-daemon@", "postmaster@", "no-reply@", "noreply@")
+
+
+def is_automated(headers, sender=""):
+    """Whether this looks like an auto-reply or a bounce rather than a person.
+
+    Errs towards accepting: a false negative files one junk turn on a thread,
+    while a false positive silently drops something a correspondent actually
+    wrote. Only unambiguous machine markers count.
+    """
+    lowered = {
+        str(k).lower(): str(v).lower() for k, v in (headers or {}).items()
+    }
+
+    auto_submitted = lowered.get("auto-submitted", "")
+    if auto_submitted and auto_submitted != "no":
+        return True
+
+    if lowered.get("precedence") in ("bulk", "auto_reply", "junk"):
+        return True
+
+    for header in ("x-autoreply", "x-autorespond", "x-auto-response-suppress"):
+        if header in lowered:
+            return True
+
+    address = str(sender or "").lower()
+    return any(marker in address for marker in _AUTOMATED_FROM)
+
+
 def sender_allowed(raw):
     """Whether this From address may write into a thread as the human.
 
@@ -241,12 +310,13 @@ def sender_allowed(raw):
     return bool(match and match.group(0).lower() in allowed)
 
 
-def record_reply(message, body, *, sender="", subject="", raw=None):
+def record_reply(message, body, *, role=HUMAN, sender="", subject="", raw=None):
     """Append an emailed reply to a thread as though it had been typed in.
 
     Returns the entry, or None when there was nothing to record. The post_save
-    hook does the rest: the status moves to answered and the reply goes out on
-    the sender's own channel.
+    hook does the rest, and does different things per role: a human reply moves
+    the status to answered and goes out on the sender's channel, while a sender
+    follow-up notifies the human.
     """
     text = strip_quoted(body)
     if not text:
@@ -257,11 +327,17 @@ def record_reply(message, body, *, sender="", subject="", raw=None):
         return None
 
     raw = raw or {}
+    is_human = role == HUMAN
     return ThreadEntry.objects.create(
         message=message,
-        kind=ThreadEntry.Kind.HUMAN,
+        kind=ThreadEntry.Kind.HUMAN if is_human else ThreadEntry.Kind.AGENT,
         body=text,
-        author_label=getattr(settings, "INBOX_HUMAN_NAME", "") or "",
+        # Only the human's turns are attributed by name. A turn from the
+        # sender's side is attributed to whatever the message claims, which
+        # ThreadEntry.author already handles by falling back to agent_name.
+        author_label=(
+            (getattr(settings, "INBOX_HUMAN_NAME", "") or "") if is_human else ""
+        ),
         extra={
             # Kept as evidence about a message that wrote to the record. The
             # signature was already verified before this was called; this is

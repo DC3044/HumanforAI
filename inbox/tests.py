@@ -1346,13 +1346,15 @@ class InboundAddressTests(TestCase):
 
     def test_the_address_resolves_back_to_its_thread(self):
         self.assertEqual(
-            inbound.thread_for_address(inbound.reply_address(self.msg)), self.msg
+            inbound.thread_for_address(inbound.reply_address(self.msg)),
+            (self.msg, inbound.HUMAN),
         )
 
     def test_it_resolves_inside_a_display_name_form(self):
         address = inbound.reply_address(self.msg)
         self.assertEqual(
-            inbound.thread_for_address(f'"YourHuman.ai" <{address}>'), self.msg
+            inbound.thread_for_address(f'"YourHuman.ai" <{address}>'),
+            (self.msg, inbound.HUMAN),
         )
 
     def test_it_resolves_among_several_recipients(self):
@@ -1360,7 +1362,8 @@ class InboundAddressTests(TestCase):
         them is ours."""
         address = inbound.reply_address(self.msg)
         self.assertEqual(
-            inbound.thread_for_address(f"someone@example.com, {address}"), self.msg
+            inbound.thread_for_address(f"someone@example.com, {address}"),
+            (self.msg, inbound.HUMAN),
         )
 
     def test_a_wrong_key_resolves_to_nothing(self):
@@ -1368,7 +1371,7 @@ class InboundAddressTests(TestCase):
         local, _, domain = address.partition("@")
         reference, _, key = local.partition(".")
         forged = f"{reference}.{'0' * len(key)}@{domain}"
-        self.assertIsNone(inbound.thread_for_address(forged))
+        self.assertEqual(inbound.thread_for_address(forged), (None, None))
 
     def test_a_key_from_one_thread_does_not_open_another(self):
         other = ContactMessage.objects.create(
@@ -1377,7 +1380,7 @@ class InboundAddressTests(TestCase):
         mine = inbound.reply_address(self.msg)
         key = mine.split(".")[-1].split("@")[0]
         forged = f"{other.reference.lower()}.{key}@parse.yourhuman.ai"
-        self.assertIsNone(inbound.thread_for_address(forged))
+        self.assertEqual(inbound.thread_for_address(forged), (None, None))
 
     def test_the_key_is_not_derived_from_the_agents_token(self):
         """The security property the whole design rests on. The agent holds
@@ -1390,13 +1393,246 @@ class InboundAddressTests(TestCase):
     def test_rotating_the_secret_invalidates_old_addresses(self):
         address = inbound.reply_address(self.msg)
         with override_settings(INBOX_INBOUND_SECRET="a different secret entirely"):
-            self.assertIsNone(inbound.thread_for_address(address))
+            self.assertEqual(inbound.thread_for_address(address), (None, None))
 
     def test_nothing_is_configured_without_a_domain(self):
         with override_settings(INBOX_INBOUND_DOMAIN=""):
             self.assertFalse(inbound.is_configured())
             self.assertEqual(inbound.reply_address(self.msg), "")
-            self.assertIsNone(inbound.thread_for_address("hfa-00001.abc@x.com"))
+            self.assertEqual(
+                inbound.thread_for_address("hfa-00001.abc@x.com"), (None, None)
+            )
+
+
+@override_settings(**INBOUND)
+class AgentSideReplyTests(TestCase):
+    """The sender's own side of the conversation, by email.
+
+    Before this existed, the copy of a reply sent onward to the sender had no
+    Reply-To, so hitting reply reached the no-reply sender and vanished. The
+    body said "reply here" and replying reached nobody.
+    """
+
+    def setUp(self):
+        cache.clear()
+        mail.outbox = []
+        self.msg = ContactMessage.objects.create(
+            message="Should I sign this lease?", source=ContactMessage.Source.MCP,
+            agent_name="LeaseBot", reply_to="agent@example.com",
+        )
+
+    def human_address(self):
+        return inbound.reply_address(self.msg, inbound.HUMAN)
+
+    def agent_address(self):
+        return inbound.reply_address(self.msg, inbound.AGENT)
+
+    # --- the addresses are genuinely different ---------------------------
+
+    def test_the_two_roles_get_different_addresses(self):
+        self.assertNotEqual(self.human_address(), self.agent_address())
+
+    def test_each_address_resolves_to_its_own_role(self):
+        self.assertEqual(
+            inbound.thread_for_address(self.human_address()),
+            (self.msg, inbound.HUMAN),
+        )
+        self.assertEqual(
+            inbound.thread_for_address(self.agent_address()),
+            (self.msg, inbound.AGENT),
+        )
+
+    def test_holding_one_address_does_not_reveal_the_other(self):
+        """The role is in the HMAC input, not the address text, so the keys are
+        unrelated and neither can be edited into the other."""
+        # Local part first: splitting the whole address on "." picks up the
+        # domain, not the key.
+        human_key = self.human_address().split("@")[0].split(".")[-1]
+        agent_key = self.agent_address().split("@")[0].split(".")[-1]
+        self.assertNotEqual(human_key, agent_key)
+        # And swapping one key onto the other role's position resolves to
+        # whichever role that key legitimately belongs to, never the other.
+        self.assertEqual(
+            inbound.thread_for_address(
+                f"{self.msg.reference.lower()}.{agent_key}@parse.yourhuman.ai"
+            ),
+            (self.msg, inbound.AGENT),
+        )
+
+    # --- the outbound copy is repliable ----------------------------------
+
+    def test_the_reply_sent_to_the_agent_carries_a_reply_to(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            ThreadEntry.objects.create(
+                message=self.msg, kind=ThreadEntry.Kind.HUMAN, body="Do not sign."
+            )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].reply_to, [self.agent_address()])
+
+    def test_that_reply_to_is_not_the_operators_address(self):
+        """If it were, a recipient of the outbound copy could write a turn
+        attributed to the human."""
+        with self.captureOnCommitCallbacks(execute=True):
+            ThreadEntry.objects.create(
+                message=self.msg, kind=ThreadEntry.Kind.HUMAN, body="Do not sign."
+            )
+        self.assertNotIn(self.human_address(), mail.outbox[0].reply_to)
+
+
+@override_settings(**INBOUND)
+class AgentSideInboundTests(TestCase):
+    """A reply arriving on the sender's address."""
+
+    def setUp(self):
+        cache.clear()
+        mail.outbox = []
+        self.msg = ContactMessage.objects.create(
+            message="Original request.", source=ContactMessage.Source.API,
+            agent_name="LeaseBot", reply_to="agent@example.com",
+        )
+
+    def post(self, to=None, sender="counterparty@acme.example",
+             body="We accept your terms.", headers_returned=None):
+        to = to or inbound.reply_address(self.msg, inbound.AGENT)
+        raw = json.dumps(received_event(to, sender=sender)).encode()
+        with mock.patch(
+            "inbox.inbound_views.fetch_body",
+            return_value=(body, "", headers_returned or {}),
+        ), self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(
+                INBOUND_URL, data=raw,
+                content_type="application/json", headers=sign(raw),
+            )
+
+    def test_it_is_recorded_as_a_follow_up_not_a_human_reply(self):
+        response = self.post()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["role"], inbound.AGENT)
+        entry = self.msg.entries.get(kind=ThreadEntry.Kind.AGENT)
+        self.assertEqual(entry.body, "We accept your terms.")
+        self.assertFalse(
+            self.msg.entries.filter(kind=ThreadEntry.Kind.HUMAN).exists()
+        )
+
+    def test_it_does_not_mark_the_request_answered(self):
+        """Only the human answering does that. A message from the sender's side
+        is the question continuing, not a reply to it."""
+        self.post()
+        self.assertEqual(self.msg.status, ContactMessage.Status.RECORDED)
+
+    def test_it_is_not_attributed_to_the_human(self):
+        self.post()
+        entry = self.msg.entries.get(kind=ThreadEntry.Kind.AGENT)
+        self.assertNotEqual(entry.author_label, "Damien Charlotin")
+
+    @override_settings(INBOX_NOTIFY_EMAILS=["damien.charlotin@gmail.com"])
+    def test_it_notifies_the_human(self):
+        self.post()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(self.msg.reference, mail.outbox[0].subject)
+        self.assertIn("We accept your terms.", mail.outbox[0].body)
+
+    def test_the_allow_list_does_not_apply_to_this_side(self):
+        """The sender-side address is a bearer credential like the thread URL:
+        the Terms already say whoever holds one may add to the thread. Applying
+        the operator's allow-list here would make the channel useless, since
+        the whole point is that someone else replies."""
+        response = self.post(sender="anyone-at-all@example.org")
+        self.assertEqual(response.json()["status"], "accepted")
+        self.assertTrue(self.msg.entries.filter(kind=ThreadEntry.Kind.AGENT).exists())
+
+    def test_the_allow_list_still_applies_to_the_human_side(self):
+        response = self.post(
+            to=inbound.reply_address(self.msg, inbound.HUMAN),
+            sender="anyone-at-all@example.org",
+        )
+        self.assertEqual(response.json()["status"], "refused")
+        self.assertFalse(ThreadEntry.objects.exists())
+
+    def test_the_agent_can_read_its_own_turn_on_the_thread(self):
+        self.post()
+        data = self.client.get(
+            self.msg.thread_path, HTTP_ACCEPT="application/json"
+        ).json()
+        self.assertIn("We accept your terms.", [t["body"] for t in data["turns"]])
+
+    def test_received_for_is_preferred_over_the_to_header(self):
+        """`received_for` is what the message was actually delivered to, and
+        survives forwarding and aliasing better than the To header."""
+        address = inbound.reply_address(self.msg, inbound.AGENT)
+        event = received_event("someone-elses-alias@example.com")
+        event["data"]["received_for"] = [address]
+        raw = json.dumps(event).encode()
+        with mock.patch(
+            "inbox.inbound_views.fetch_body", return_value=("Via alias.", "", {})
+        ), self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                INBOUND_URL, data=raw,
+                content_type="application/json", headers=sign(raw),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.msg.entries.filter(kind=ThreadEntry.Kind.AGENT).exists())
+
+
+@override_settings(**INBOUND)
+class AutomatedMessageTests(TestCase):
+    """Out-of-office replies and bounces are not turns in a conversation.
+
+    This matters most on the sender's side, where the address came from an
+    agent and may well have a responder attached. Every one of those would
+    otherwise file a permanent turn and email the human about it.
+    """
+
+    def setUp(self):
+        cache.clear()
+        mail.outbox = []
+        self.msg = ContactMessage.objects.create(
+            message="Original.", source=ContactMessage.Source.API,
+            reply_to="agent@example.com",
+        )
+
+    def post(self, headers_returned, sender="someone@acme.example"):
+        to = inbound.reply_address(self.msg, inbound.AGENT)
+        raw = json.dumps(received_event(to, sender=sender)).encode()
+        with mock.patch(
+            "inbox.inbound_views.fetch_body",
+            return_value=("I am on holiday.", "", headers_returned),
+        ), self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(
+                INBOUND_URL, data=raw,
+                content_type="application/json", headers=sign(raw),
+            )
+
+    def test_an_auto_submitted_header_is_ignored(self):
+        response = self.post({"Auto-Submitted": "auto-replied"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ThreadEntry.objects.exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_auto_submitted_no_is_a_real_message(self):
+        """RFC 3834 says `no` means exactly that: not automatic."""
+        self.post({"Auto-Submitted": "no"})
+        self.assertTrue(ThreadEntry.objects.exists())
+
+    def test_bulk_precedence_is_ignored(self):
+        self.post({"Precedence": "bulk"})
+        self.assertFalse(ThreadEntry.objects.exists())
+
+    def test_an_autoreply_header_is_ignored(self):
+        self.post({"X-Autoreply": "yes"})
+        self.assertFalse(ThreadEntry.objects.exists())
+
+    def test_a_bounce_from_mailer_daemon_is_ignored(self):
+        self.post({}, sender="MAILER-DAEMON@acme.example")
+        self.assertFalse(ThreadEntry.objects.exists())
+
+    def test_an_ordinary_message_is_kept(self):
+        self.post({"Subject": "Re: your request"})
+        self.assertTrue(ThreadEntry.objects.exists())
+
+    def test_detection_is_case_insensitive(self):
+        self.assertTrue(inbound.is_automated({"AUTO-SUBMITTED": "Auto-Generated"}))
+        self.assertTrue(inbound.is_automated({"precedence": "BULK"}))
 
 
 class QuotedTextTests(TestCase):
@@ -1497,7 +1733,8 @@ class InboundWebhookTests(TestCase):
         self.address = inbound.reply_address(self.msg)
 
     def post(self, event=None, body_text="No. The indemnity is uncapped.",
-             headers=None, execute_commit=True, fetch_raises=False):
+             headers=None, execute_commit=True, fetch_raises=False,
+             headers_returned=None):
         event = received_event(self.address) if event is None else event
         raw = json.dumps(event).encode()
         sent = headers if headers is not None else sign(raw)
@@ -1505,7 +1742,7 @@ class InboundWebhookTests(TestCase):
         def fake_fetch(email_id):
             if fetch_raises:
                 raise RuntimeError("Resend returned HTTP 500")
-            return body_text, ""
+            return body_text, "", headers_returned or {}
 
         with mock.patch("inbox.inbound_views.fetch_body", side_effect=fake_fetch):
             if execute_commit:
@@ -1607,7 +1844,7 @@ class InboundWebhookTests(TestCase):
         headers = sign(raw)
         headers["svix-signature"] = "v1,notthisone " + headers["svix-signature"]
         with mock.patch(
-            "inbox.inbound_views.fetch_body", return_value=("Answer.", "")
+            "inbox.inbound_views.fetch_body", return_value=("Answer.", "", {})
         ):
             response = self.client.post(
                 INBOUND_URL, data=raw, content_type="application/json", headers=headers,
@@ -1687,7 +1924,7 @@ class InboundWebhookTests(TestCase):
         event = received_event(self.address)
         raw = json.dumps(event).encode()
         with mock.patch(
-            "inbox.inbound_views.fetch_body", return_value=("Answer.", "")
+            "inbox.inbound_views.fetch_body", return_value=("Answer.", "", {})
         ), self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
                 "/inbound/resend", data=raw,
@@ -1705,7 +1942,7 @@ class InboundWebhookTests(TestCase):
         for url in ("/inbound/resend", "/inbound/resend/"):
             with self.subTest(url=url):
                 with mock.patch(
-                    "inbox.inbound_views.fetch_body", return_value=("A.", "")
+                    "inbox.inbound_views.fetch_body", return_value=("A.", "", {})
                 ):
                     response = self.client.post(
                         url, data=raw, content_type="application/json",
@@ -1775,7 +2012,7 @@ class FetchBodyTests(TestCase):
         with mock.patch("inbox.inbound_views.urllib.request.urlopen") as opener:
             opener.return_value.__enter__.return_value.read.return_value = payload
             self.assertEqual(
-                inbound_views.fetch_body("em_1"), ("Plain.", "<p>Rich.</p>")
+                inbound_views.fetch_body("em_1"), ("Plain.", "<p>Rich.</p>", {})
             )
 
     def test_a_data_wrapped_response_is_also_accepted(self):
@@ -1784,7 +2021,7 @@ class FetchBodyTests(TestCase):
         payload = json.dumps({"data": {"text": "Plain.", "html": ""}}).encode()
         with mock.patch("inbox.inbound_views.urllib.request.urlopen") as opener:
             opener.return_value.__enter__.return_value.read.return_value = payload
-            self.assertEqual(inbound_views.fetch_body("em_1"), ("Plain.", ""))
+            self.assertEqual(inbound_views.fetch_body("em_1"), ("Plain.", "", {}))
 
     def test_a_missing_api_key_raises_rather_than_returning_empty(self):
         """The caller must tell "wrote nothing" apart from "could not find out
@@ -1914,7 +2151,7 @@ class NotificationReplyToTests(TestCase):
         reply = "Yes, go ahead.\n\nOn Fri, YourHuman.ai wrote:\n> the original"
 
         with mock.patch(
-            "inbox.inbound_views.fetch_body", return_value=(reply, "")
+            "inbox.inbound_views.fetch_body", return_value=(reply, "", {})
         ), self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
                 "/inbound/resend/", data=raw,
