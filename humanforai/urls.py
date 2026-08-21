@@ -31,7 +31,14 @@ urlpatterns = [
     # Where Resend posts an inbound email. No secret in the path: Resend
     # signs every webhook, so authenticity is checked cryptographically
     # rather than by hiding the URL.
+    #
+    # Registered with and without the trailing slash, for the same reason /mcp
+    # is: the URL is typed into a dashboard by hand, and APPEND_SLASH cannot
+    # rescue a POST. It answers 301, the sender will not replay a body through
+    # a redirect, and the delivery retries forever against a redirect it can
+    # never satisfy. Observed in production before this line existed.
     path("inbound/resend/", inbound_views.inbound_mail, name="inbound_mail"),
+    path("inbound/resend", inbound_views.inbound_mail),
     # MCP endpoint. Registered with and without the trailing slash: MCP client
     # config is copy-pasted by hand and APPEND_SLASH cannot rescue a POST.
     path("mcp", mcp_views.mcp_endpoint, name="mcp"),

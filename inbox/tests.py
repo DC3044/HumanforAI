@@ -1674,6 +1674,44 @@ class InboundWebhookTests(TestCase):
         with override_settings(INBOX_INBOUND_DOMAIN=""):
             self.assertEqual(self.client.post(INBOUND_URL, {}).status_code, 404)
 
+    def test_it_answers_without_a_trailing_slash_too(self):
+        """The URL is typed into a provider's dashboard by hand, and APPEND_SLASH
+        cannot rescue a POST: it answers 301, the sender will not replay a body
+        through a redirect, and the delivery retries forever against a redirect
+        it can never satisfy.
+
+        This is not hypothetical. It happened in production, to this endpoint,
+        and every test here posted to the slashed form so none of them saw it.
+        """
+        event = received_event(self.address)
+        raw = json.dumps(event).encode()
+        with mock.patch(
+            "inbox.inbound_views.fetch_body", return_value=("Answer.", "")
+        ), self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/inbound/resend", data=raw,
+                content_type="application/json", headers=sign(raw),
+            )
+
+        self.assertEqual(response.status_code, 200, "unslashed URL must not redirect")
+        self.assertEqual(
+            self.msg.entries.get(kind=ThreadEntry.Kind.HUMAN).body, "Answer."
+        )
+
+    def test_neither_form_redirects(self):
+        """A 301 is the specific failure mode; assert against it directly."""
+        raw = json.dumps(received_event(self.address)).encode()
+        for url in ("/inbound/resend", "/inbound/resend/"):
+            with self.subTest(url=url):
+                with mock.patch(
+                    "inbox.inbound_views.fetch_body", return_value=("A.", "")
+                ):
+                    response = self.client.post(
+                        url, data=raw, content_type="application/json",
+                        headers=sign(raw),
+                    )
+                self.assertNotIn(response.status_code, (301, 302))
+
 
 class SvixVectorTests(TestCase):
     """Signature verification against a published test vector.

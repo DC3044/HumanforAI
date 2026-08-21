@@ -659,6 +659,10 @@ Inbound needs an MX record and three more variables:
 2. **Resend → Webhooks**, add an endpoint at
    `https://yourhuman.ai/inbound/resend/` subscribed to `email.received`. Copy
    the signing secret it shows — `whsec_...` — into `RESEND_WEBHOOK_SECRET`.
+   Either form of the URL works; the route is registered with and without the
+   trailing slash, because APPEND_SLASH answers a POST with a 301 and a
+   webhook sender will not replay a body through a redirect. It retries
+   against the redirect instead, forever. That happened here.
 3. Generate `INBOX_INBOUND_SECRET` with `openssl rand -hex 32`. This one is
    ours, not Resend's: it keys the per-thread reply address so that a thread can
    only be answered through the address issued for it.
