@@ -3,7 +3,8 @@ import json
 from django.core.cache import cache
 from django.test import TestCase
 
-from inbox.models import ContactMessage
+from inbox.models import ContactMessage, ThreadEntry
+from inbox.throttle import FOLLOW_UP_LIMIT_PER_WINDOW, LIMIT_PER_WINDOW
 from mcpserver import protocol as p
 
 MODERN_META = {
@@ -80,7 +81,7 @@ class DiscoveryTests(McpTestCase):
 
     def test_tools_list_exposes_the_tool_with_both_schemas(self):
         result = self.result(self.modern("tools/list"))
-        (tool,) = result["tools"]
+        tool = result["tools"][0]
         self.assertEqual(tool["name"], "request_human_assistance")
         self.assertEqual(
             tool["inputSchema"]["properties"]["category"]["enum"],
@@ -342,7 +343,10 @@ class TransportTests(McpTestCase):
         self.assertEqual(response["Allow"], "POST, OPTIONS")
         payload = json.loads(response.content)
         self.assertEqual(payload["transport"], "streamable-http")
-        self.assertEqual(payload["tools"], ["request_human_assistance"])
+        self.assertEqual(
+            payload["tools"],
+            ["request_human_assistance", "check_request_status", "reply_to_thread"],
+        )
 
     def test_trailing_slash_reaches_the_same_endpoint(self):
         response = self.client.post(
@@ -404,3 +408,309 @@ class RegistryAuthTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/plain; charset=utf-8")
         self.assertEqual(response.content.decode().strip(), proof)
+
+
+class ThreadToolTestCase(McpTestCase):
+    """Shared setup for the two tools that read and continue a thread."""
+
+    def file_a_request(self, **overrides):
+        args = dict(GOOD_ARGS)
+        args.update(overrides)
+        result = self.result(
+            self.modern("tools/call", {
+                "name": "request_human_assistance", "arguments": args
+            })
+        )
+        structured = result["structuredContent"]
+        self.msg = ContactMessage.objects.get(pk=int(structured["reference"][4:]))
+        return structured
+
+    def call(self, name, arguments):
+        return self.result(
+            self.modern("tools/call", {"name": name, "arguments": arguments})
+        )
+
+    def check(self, reference, token):
+        return self.call(
+            "check_request_status",
+            {"reference": reference, "access_token": token},
+        )
+
+
+class ToolListingTests(McpTestCase):
+    def test_all_three_tools_are_advertised(self):
+        result = self.result(self.modern("tools/list"))
+        self.assertEqual(
+            [tool["name"] for tool in result["tools"]],
+            ["request_human_assistance", "check_request_status", "reply_to_thread"],
+        )
+
+    def test_the_status_tool_declares_itself_read_only(self):
+        """Clients use this to decide what needs confirming. Polling for an
+        answer must not look like an action with side effects."""
+        result = self.result(self.modern("tools/list"))
+        tool = next(t for t in result["tools"] if t["name"] == "check_request_status")
+        self.assertTrue(tool["annotations"]["readOnlyHint"])
+        self.assertTrue(tool["annotations"]["idempotentHint"])
+
+    def test_the_instructions_explain_how_to_get_an_answer(self):
+        """The only thing a model reads before deciding how to use this server.
+        If it does not say the token must be kept, the token gets thrown away."""
+        result = self.result(self.modern("server/discover"))
+        instructions = result["instructions"]
+        self.assertIn("check_request_status", instructions)
+        self.assertIn("access_token", instructions)
+
+
+class RequestReceiptTests(ThreadToolTestCase):
+    def test_the_receipt_carries_the_credentials_for_reading_a_reply(self):
+        structured = self.file_a_request()
+        self.assertEqual(structured["access_token"], self.msg.access_token)
+        self.assertIn(self.msg.access_token, structured["thread_url"])
+
+    def test_the_text_content_also_carries_them(self):
+        """Models act on the text far more reliably than on structuredContent,
+        so the credentials cannot live only in the structured half."""
+        result = self.result(
+            self.modern("tools/call", {
+                "name": "request_human_assistance", "arguments": GOOD_ARGS
+            })
+        )
+        text = result["content"][0]["text"]
+        msg = ContactMessage.objects.get()
+        self.assertIn(msg.access_token, text)
+        self.assertIn("check_request_status", text)
+
+
+class CheckRequestStatusTests(ThreadToolTestCase):
+    def test_an_unread_request_reports_silence_not_refusal(self):
+        """An agent that reads 'no' into an empty thread may proceed when it
+        should wait. The wording has to distinguish the two."""
+        structured = self.file_a_request()
+        result = self.check(structured["reference"], structured["access_token"])
+        self.assertEqual(result["structuredContent"]["status"], "recorded")
+        self.assertFalse(result["structuredContent"]["human_has_replied"])
+        self.assertIn("nobody has read it yet", result["content"][0]["text"])
+
+    def test_the_original_message_is_the_first_turn(self):
+        structured = self.file_a_request()
+        turns = self.check(
+            structured["reference"], structured["access_token"]
+        )["structuredContent"]["turns"]
+        self.assertEqual(turns[0]["author"], "sender")
+        self.assertIn(GOOD_ARGS["request"], turns[0]["body"])
+
+    def test_a_reply_is_returned(self):
+        structured = self.file_a_request()
+        ThreadEntry.objects.create(
+            message=self.msg, kind=ThreadEntry.Kind.HUMAN,
+            author_label="Damien Charlotin",
+            body="Clause 9 is uncapped. Do not accept it.",
+        )
+        result = self.check(structured["reference"], structured["access_token"])
+        self.assertEqual(result["structuredContent"]["status"], "answered")
+        self.assertTrue(result["structuredContent"]["human_has_replied"])
+        self.assertIn("Clause 9 is uncapped", result["content"][0]["text"])
+
+    def test_read_but_unanswered_is_reported_as_such(self):
+        structured = self.file_a_request()
+        ThreadEntry.objects.create(
+            message=self.msg, kind=ThreadEntry.Kind.STATUS,
+            status_value=ContactMessage.Status.REVIEWED,
+        )
+        result = self.check(structured["reference"], structured["access_token"])
+        self.assertEqual(result["structuredContent"]["status"], "reviewed")
+        self.assertIn("not yet written a reply", result["content"][0]["text"])
+
+    def test_a_declined_request_tells_the_agent_to_stop_waiting(self):
+        structured = self.file_a_request()
+        ThreadEntry.objects.create(
+            message=self.msg, kind=ThreadEntry.Kind.STATUS,
+            status_value=ContactMessage.Status.DECLINED,
+        )
+        result = self.check(structured["reference"], structured["access_token"])
+        self.assertIn("do not keep waiting", result["content"][0]["text"].lower())
+
+    def test_internal_notes_are_not_returned(self):
+        structured = self.file_a_request()
+        ThreadEntry.objects.create(
+            message=self.msg, kind=ThreadEntry.Kind.NOTE,
+            body="Check who this operator really is.",
+        )
+        result = self.check(structured["reference"], structured["access_token"])
+        self.assertNotIn("really is", json.dumps(result))
+
+    def test_a_wrong_token_is_a_tool_error_the_model_can_read(self):
+        structured = self.file_a_request()
+        result = self.check(structured["reference"], "not-the-token")
+        self.assertTrue(result["isError"])
+        self.assertIn("No thread matches", result["content"][0]["text"])
+
+    def test_a_missing_reference_fails_identically(self):
+        """No enumeration oracle over MCP either."""
+        structured = self.file_a_request()
+        wrong_token = self.check(structured["reference"], "not-the-token")
+        no_such = self.check("HFA-99999", structured["access_token"])
+        self.assertEqual(
+            wrong_token["content"][0]["text"], no_such["content"][0]["text"]
+        )
+
+    def test_a_malformed_reference_is_a_tool_error_not_a_crash(self):
+        result = self.check("not-a-reference", "whatever")
+        self.assertTrue(result["isError"])
+
+    def test_reading_a_thread_records_nothing(self):
+        structured = self.file_a_request()
+        before = ThreadEntry.objects.count()
+        self.check(structured["reference"], structured["access_token"])
+        self.assertEqual(ThreadEntry.objects.count(), before)
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+    def test_polling_is_never_rate_limited(self):
+        """An agent told to poll for a human's answer must not be limited out of
+        hearing it. The channel is worthless if it closes before the reply."""
+        structured = self.file_a_request()
+        for _ in range(LIMIT_PER_WINDOW + 5):
+            result = self.check(structured["reference"], structured["access_token"])
+            self.assertFalse(result["isError"], result)
+
+
+class ReplyToThreadTests(ThreadToolTestCase):
+    def test_a_follow_up_is_appended_to_the_same_record(self):
+        structured = self.file_a_request()
+        result = self.call("reply_to_thread", {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+            "message": "Vendor refused the cap. Do I walk away?",
+        })
+        self.assertFalse(result["isError"])
+        entry = self.msg.entries.get(kind=ThreadEntry.Kind.AGENT)
+        self.assertEqual(entry.body, "Vendor refused the cap. Do I walk away?")
+        # One conversation, one record.
+        self.assertEqual(ContactMessage.objects.count(), 1)
+
+    def test_a_follow_up_keeps_the_same_forensics_as_a_first_message(self):
+        structured = self.file_a_request()
+        self.call("reply_to_thread", {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+            "message": "More context.",
+        })
+        entry = self.msg.entries.get(kind=ThreadEntry.Kind.AGENT)
+        self.assertEqual(entry.source, ContactMessage.Source.MCP)
+        self.assertIsNotNone(entry.ip_address)
+        self.assertEqual(entry.extra["mcp"]["protocol_version"], p.MODERN_VERSION)
+        self.assertEqual(entry.extra["mcp"]["client"]["name"], "TestClient")
+
+    def test_the_arguments_are_kept_verbatim(self):
+        """Same promise the original request makes: the record shows what was
+        actually sent, not our reading of it."""
+        structured = self.file_a_request()
+        self.call("reply_to_thread", {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+            "message": "With extras.",
+            "deadline": "Friday",
+        })
+        entry = self.msg.entries.get(kind=ThreadEntry.Kind.AGENT)
+        self.assertEqual(entry.extra["mcp"]["arguments"]["deadline"], "Friday")
+
+    def test_an_empty_message_is_refused(self):
+        structured = self.file_a_request()
+        result = self.call("reply_to_thread", {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+            "message": "   ",
+        })
+        self.assertTrue(result["isError"])
+        self.assertFalse(ThreadEntry.objects.filter(kind=ThreadEntry.Kind.AGENT).exists())
+
+    def test_a_wrong_token_cannot_write_to_a_thread(self):
+        structured = self.file_a_request()
+        result = self.call("reply_to_thread", {
+            "reference": structured["reference"],
+            "access_token": "guessed",
+            "message": "Injected.",
+        })
+        self.assertTrue(result["isError"])
+        self.assertFalse(ThreadEntry.objects.filter(kind=ThreadEntry.Kind.AGENT).exists())
+
+    def test_the_status_is_reported_back(self):
+        structured = self.file_a_request()
+        ThreadEntry.objects.create(
+            message=self.msg, kind=ThreadEntry.Kind.HUMAN, body="An answer."
+        )
+        result = self.call("reply_to_thread", {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+            "message": "Thanks, one more question.",
+        })
+        self.assertEqual(result["structuredContent"]["thread_status"], "answered")
+
+    def test_follow_ups_spend_the_follow_up_allowance_not_the_message_one(self):
+        structured = self.file_a_request()
+        args = {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+        }
+        for i in range(LIMIT_PER_WINDOW + 5):
+            result = self.call("reply_to_thread", {**args, "message": f"turn {i}"})
+            self.assertFalse(result["isError"], result)
+
+    def test_the_follow_up_allowance_does_run_out(self):
+        structured = self.file_a_request()
+        args = {
+            "reference": structured["reference"],
+            "access_token": structured["access_token"],
+        }
+        for i in range(FOLLOW_UP_LIMIT_PER_WINDOW):
+            self.call("reply_to_thread", {**args, "message": f"turn {i}"})
+        result = self.call("reply_to_thread", {**args, "message": "one too many"})
+        self.assertTrue(result["isError"])
+        self.assertIn("Rate limit exceeded", result["content"][0]["text"])
+
+
+class TransportAgreementTests(ThreadToolTestCase):
+    def test_http_and_mcp_describe_the_same_thread(self):
+        """Two transports over one record. An agent that files over MCP and
+        polls over HTTP, or the reverse, must not see two different stories."""
+        structured = self.file_a_request()
+        ThreadEntry.objects.create(
+            message=self.msg, kind=ThreadEntry.Kind.HUMAN, body="The answer."
+        )
+        over_http = self.client.get(
+            self.msg.thread_path, HTTP_ACCEPT="application/json"
+        ).json()
+        over_mcp = self.check(
+            structured["reference"], structured["access_token"]
+        )["structuredContent"]
+
+        self.assertEqual(over_http["turns"], over_mcp["turns"])
+        self.assertEqual(over_http["status"], over_mcp["status"])
+        self.assertEqual(over_http["human_has_replied"], over_mcp["human_has_replied"])
+
+    def test_a_follow_up_over_http_is_visible_over_mcp(self):
+        structured = self.file_a_request()
+        self.client.post(
+            self.msg.thread_path, data=json.dumps({"message": "Sent over HTTP."}),
+            content_type="application/json",
+        )
+        turns = self.check(
+            structured["reference"], structured["access_token"]
+        )["structuredContent"]["turns"]
+        self.assertIn("Sent over HTTP.", [t["body"] for t in turns])
+
+    def test_a_legacy_client_can_also_read_a_thread(self):
+        """Most deployed clients still speak the older revisions. The reply
+        channel cannot be modern-only."""
+        structured = self.file_a_request()
+        result = self.result(self.legacy("tools/call", {
+            "name": "check_request_status",
+            "arguments": {
+                "reference": structured["reference"],
+                "access_token": structured["access_token"],
+            },
+        }))
+        self.assertFalse(result["isError"])
+        # Modern-only keys are stripped for the older result shape.
+        self.assertNotIn("resultType", result)

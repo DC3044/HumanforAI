@@ -9,7 +9,33 @@ Everything sensitive or deployment-specific comes from environment variables:
                         deploy, useless as a record)
   ALLOWED_HOSTS         comma-separated, e.g. "humanforai-xyz.a.run.app"
   CSRF_TRUSTED_ORIGINS  comma-separated with scheme, e.g. "https://humanforai-xyz.a.run.app"
-  WAGTAILADMIN_BASE_URL e.g. "https://humanforai-xyz.a.run.app"
+  WAGTAILADMIN_BASE_URL e.g. "https://humanforai-xyz.a.run.app". Load-bearing:
+                        this is what thread URLs are built from, so leaving it
+                        at the placeholder tells every agent to collect its
+                        answer from example.com. A system check warns if so.
+  INBOX_NOTIFY_EMAILS   comma-separated addresses told when a message or a
+                        follow-up arrives. Empty disables notification
+  INBOX_HUMAN_NAME      how the human is attributed on replies the sender reads
+                        (default "Damien Charlotin")
+  EMAIL_HOST            SMTP host; with it set, mail is actually delivered.
+                        Without it the console backend still writes every
+                        notification to Cloud Logging. See also EMAIL_PORT,
+                        EMAIL_HOST_USER, EMAIL_HOST_PASSWORD, EMAIL_USE_TLS
+  DEFAULT_FROM_EMAIL    envelope sender for notifications and replies. Must be
+                        an address Resend is verified to send as, which means a
+                        domain you have verified there - not a gmail.com
+                        address, which would fail Gmail's own DMARC policy
+  RESEND_API_KEY        sets up SMTP relay on its own, and retrieves the body
+                        of inbound email. EMAIL_HOST and friends are then
+                        unnecessary
+  INBOX_INBOUND_DOMAIN  domain whose MX record points at Resend, e.g.
+                        "parse.yourhuman.ai". Enables answering by replying to
+                        the notification email
+  RESEND_WEBHOOK_SECRET Svix signing secret from the Resend dashboard
+                        ("whsec_..."), which authenticates inbound webhooks
+  INBOX_INBOUND_SECRET  keys the per-thread reply address. Ours, not Resend's
+  INBOX_INBOUND_SENDERS comma-separated addresses allowed to answer as the
+                        human. Empty means nobody
   MCP_REGISTRY_AUTH     the "v=MCPv1; k=ed25519; p=..." line served at
                         /.well-known/mcp-registry-auth, for domain-based
                         publishing to the MCP Registry (optional)
@@ -131,15 +157,38 @@ DEFAULT_FROM_EMAIL = os.environ.get(
     "DEFAULT_FROM_EMAIL", "YourHuman.ai <noreply@yourhuman.ai>"
 )
 
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+INBOX_HUMAN_NAME = os.environ.get("INBOX_HUMAN_NAME", "Damien Charlotin")
+
+# Resend needs only the API key: its SMTP relay takes the literal username
+# "resend" and the key as the password. Spelling that out here rather than
+# asking for four correct environment variables removes the most likely way to
+# deploy with mail quietly broken. The same key retrieves the body of inbound
+# email, which the webhook does not carry.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.resend.com" if RESEND_API_KEY else "")
 if EMAIL_HOST:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
-    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_HOST_USER = os.environ.get(
+        "EMAIL_HOST_USER", "resend" if RESEND_API_KEY else ""
+    )
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", RESEND_API_KEY)
     EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") != "0"
     # Bounded so a hanging SMTP server cannot pin a Cloud Run instance.
     EMAIL_TIMEOUT = 10
+
+
+# Inbound mail. See inbox/inbound.py for why the address key and the agent's
+# access token are deliberately unrelated secrets.
+INBOX_INBOUND_DOMAIN = os.environ.get("INBOX_INBOUND_DOMAIN", "")
+INBOX_INBOUND_SECRET = os.environ.get("INBOX_INBOUND_SECRET", "")
+RESEND_WEBHOOK_SECRET = os.environ.get("RESEND_WEBHOOK_SECRET", "")
+INBOX_INBOUND_SENDERS = [
+    a.strip()
+    for a in os.environ.get("INBOX_INBOUND_SENDERS", "").split(",")
+    if a.strip()
+]
 
 # Log to stdout so Cloud Logging picks everything up.
 LOGGING = {

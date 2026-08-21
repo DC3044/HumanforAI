@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "ai.yourhuman/human-for-ai",
   "title": "YourHuman.ai",
-  "description": "Ask a human for legal review, confirmation, a signature, or a physical-world act",
-  "version": "0.1.0",
+  "description": "Ask a human for legal review, confirmation, a signature, or a physical-world act, then read the answer",
+  "version": "0.2.0",
   "websiteUrl": "https://yourhuman.ai/",
   "remotes": [
     {

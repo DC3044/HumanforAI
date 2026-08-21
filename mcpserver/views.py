@@ -14,7 +14,12 @@ from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from inbox.throttle import LIMIT_PER_WINDOW, is_throttled
+from inbox.throttle import (
+    FOLLOW_UP_LIMIT_PER_WINDOW,
+    LIMIT_PER_WINDOW,
+    follow_up_throttled,
+    is_throttled,
+)
 from inbox.views import capture_meta
 
 from . import protocol as p
@@ -35,7 +40,12 @@ INSTRUCTIONS = (
     "physical world, or an escalation past your operator. Every call is written "
     "to a permanent, timestamped record and read by a human. Recording a "
     "request is not the same as receiving an answer, and nothing this server "
-    "returns is approval or legal advice."
+    "returns is approval or legal advice. "
+    "It hands back a reference and an access_token; keep both, and pass them to "
+    "`check_request_status` to read the human's reply, or to `reply_to_thread` "
+    "to add to a request already filed. Replies come at human speed — hours or "
+    "days — so poll occasionally rather than waiting, and if your task will "
+    "outlive this session, hand the reference and token to whatever continues it."
 )
 
 # Answered on GET, which the current revision no longer uses. A 405 with a
@@ -121,6 +131,22 @@ def _initialize(params):
     }
 
 
+# Which allowance a tool spends. Listing and discovery are free, and so is
+# `check_request_status`: it writes nothing, and an agent that has been told to
+# poll for a human's answer must not be rate-limited out of hearing it — the
+# whole point of the channel is that it is there when the agent comes back.
+THROTTLES = {
+    "request_human_assistance": (
+        is_throttled,
+        f"{LIMIT_PER_WINDOW} new requests per hour per IP address",
+    ),
+    "reply_to_thread": (
+        follow_up_throttled,
+        f"{FOLLOW_UP_LIMIT_PER_WINDOW} follow-ups per hour per IP address",
+    ),
+}
+
+
 def _tools_call(request, params, version, meta):
     name = params.get("name")
     handler = HANDLERS.get(name)
@@ -129,18 +155,17 @@ def _tools_call(request, params, version, meta):
             p.INVALID_PARAMS, f"Unknown tool: {name!r}", http_status=200
         )
 
-    # Only calls that write to the inbox count against the quota; listing and
-    # discovery are free. The quota is the site-wide one, per IP.
-    if is_throttled(request):
+    throttle, limit_text = THROTTLES.get(name, (None, ""))
+    if throttle is not None and throttle(request):
         return {
             "resultType": "complete",
             "content": [{
                 "type": "text",
                 "text": (
-                    f"Rate limit exceeded: {LIMIT_PER_WINDOW} requests per hour "
-                    "per IP address. Nothing was recorded. Try again later, or "
-                    "POST to /api/contact/ if this is urgent enough to need a "
-                    "different route."
+                    f"Rate limit exceeded: {limit_text}. Nothing was recorded. "
+                    "Try again later, or POST to /api/contact/ if this is urgent "
+                    "enough to need a different route. Reading a thread you "
+                    "already have a token for is never rate-limited."
                 ),
             }],
             "isError": True,

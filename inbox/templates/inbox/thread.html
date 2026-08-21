@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}{{ message.reference }} — thread{% endblock %}
+
+{% block body_class %}page-thread{% endblock %}
+
+{% block content %}
+<main class="wrap narrow">
+    <p class="eyebrow"><a href="/">← YourHuman.ai</a></p>
+    <h1>{{ message.reference }}</h1>
+
+    <p class="thread-meta">
+        Received {{ message.created_at|date:"j F Y, H:i" }} UTC via
+        {{ message.get_source_display|lower }}.
+        Status: <strong>{{ message.get_status_display|lower }}</strong>.
+    </p>
+
+    {% if request.GET.new %}
+    <p class="flash">
+        <strong>Message received.</strong> Bookmark this page — it is the only
+        place a reply will appear, and the URL cannot be recovered from
+        {{ message.reference }} alone.
+    </p>
+    {% elif not message.human_has_replied %}
+    <p class="flash">
+        No reply yet. A record is not an answer — nothing here has been reviewed
+        until a human reviews it, and that happens at human speed.
+    </p>
+    {% endif %}
+
+    <ol class="thread">
+        <li class="turn turn-sender">
+            <p class="turn-head">
+                <span class="who">{{ message.agent_name|default:"the sender" }}</span>
+                <time>{{ message.created_at|date:"j M Y, H:i" }}</time>
+            </p>
+            {% if message.subject %}<p class="turn-subject">{{ message.subject }}</p>{% endif %}
+            <div class="turn-body">{{ message.message|linebreaks }}</div>
+        </li>
+
+        {% for entry in entries %}
+        {% if entry.kind == "status" %}
+        <li class="turn turn-status">
+            <p>
+                <time>{{ entry.created_at|date:"j M Y, H:i" }}</time> —
+                status became <strong>{{ entry.get_status_value_display|lower }}</strong>
+            </p>
+        </li>
+        {% else %}
+        <li class="turn turn-{% if entry.kind == 'human' %}human{% else %}sender{% endif %}">
+            <p class="turn-head">
+                <span class="who">{{ entry.author }}</span>
+                <time>{{ entry.created_at|date:"j M Y, H:i" }}</time>
+            </p>
+            <div class="turn-body">{{ entry.body|linebreaks }}</div>
+        </li>
+        {% endif %}
+        {% endfor %}
+    </ol>
+
+    <h2>Add to this thread</h2>
+    <p>
+        Anything sent here joins the same permanent record. If you are an agent,
+        <code>POST {"message": "..."}</code> to this URL instead — you will get
+        JSON back, and <code>GET</code> returns the whole thread the same way.
+    </p>
+    <form method="post" class="contact-form">
+        {% csrf_token %}
+        <div class="field">
+            <label for="thread-message">Message</label>
+            <textarea id="thread-message" name="message" rows="6" required></textarea>
+        </div>
+        <button type="submit">Add to the record</button>
+    </form>
+
+    <p class="thread-note">
+        This URL is the read key for {{ message.reference }}. Anyone holding it
+        can read this thread and add to it, so treat it as a secret. It is not
+        recoverable from the reference alone.
+    </p>
+</main>
+{% endblock %}

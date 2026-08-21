@@ -6,4 +6,5 @@ class InboxConfig(AppConfig):
     name = "inbox"
 
     def ready(self):
+        from . import checks  # noqa: F401  (registers the deployment checks)
         from . import signals  # noqa: F401  (registers the arrival notification)

@@ -26,7 +26,10 @@ and IP. That inbox is the core of the site.
 | `POST /api/contact/` | Leave a message; unknown JSON fields stored verbatim |
 | `GET /api/contact/?message=…` | The same, for callers that cannot POST |
 | `/contact/` | Web form for browser-driving agents and humans |
-| `POST /mcp` | MCP server exposing `request_human_assistance` |
+| `GET /t/<ref>/<token>` | Read a request's thread — status and any reply |
+| `POST /t/<ref>/<token>` | Add to that thread |
+| `POST /mcp` | MCP server: file a request, poll it, write again |
+| `POST /inbound/resend/` | Resend webhook: an emailed reply from the human |
 | `/terms/`, `/privacy/` | Terms for Agents; Privacy & Data Notice |
 | `/terms.md`, `/privacy.md` | The same two documents as Markdown source |
 
@@ -87,9 +90,173 @@ the Markdown and the pages follow; there is nothing else to update.
 Both files must therefore stay in the deployed image: `.dockerignore` excludes
 only `README.md`.
 
+## The reply channel
+
+Filing a request used to be the whole story: four ways in, none out. The tool
+description promised "a reply, if there is one, will go to `reply_to`" and
+nothing ever sent one.
+
+The shape of the fix follows from three facts about the callers. **The agent
+that wrote is probably gone** — a session ends, a context window is discarded —
+so a reply has to be durably addressable rather than pushed at a live
+connection. **`reply_to` is unverified free text**, holding addresses, URLs,
+Slack handles and prose, so no channel can assume it is reachable. And **the
+inbox is append-only**, which rules out editing a message to add an answer.
+
+So the record becomes a thread. `ThreadEntry` rows hang off a `ContactMessage`
+and are only ever appended: replies from the human, follow-ups from the sender,
+triage decisions, private notes, and delivery attempts. Nothing is edited and
+nothing is deleted — a correction is a further entry saying so. Append-only was
+never the same thing as write-once.
+
+Two consequences worth naming:
+
+- **Status is not a column.** `ContactMessage.status` is derived from the most
+  recent `status` entry in the thread, so moving a request from `recorded` to
+  `reviewed` to `answered` appends a row rather than overwriting one: how a
+  request was triaged is itself part of the record. Writing a reply appends the
+  `answered` transition automatically, unless the human has already settled the
+  request as `declined` or `closed` — a postscript must not reopen a decision.
+- **The reference cannot be the key.** `HFA-00042` is public and citable on
+  purpose, and it is sequential, so five digits are trivially enumerable. Each
+  message also carries a random `access_token`, handed to the sender once in the
+  receipt. The pair addresses `/t/HFA-00042/<token>`: public reference for the
+  record, secret URL for the correspondence. Every lookup failure — malformed
+  reference, no such row, wrong token — returns the same 404, since
+  distinguishing them would turn the endpoint into an enumeration oracle.
+
+The thread endpoint content-negotiates: a browser gets the page, anything else
+gets JSON. That is keyed on HTML *ranking above* JSON in `Accept` rather than
+merely appearing in it, because `*/*` from a plain HTTP client technically
+accepts HTML and an agent's fetch tool should not be handed markup. `POST
+{"message": …}` appends a turn from the sender's side and notifies the human.
+Follow-ups draw on their own, more generous hourly allowance, since continuing a
+conversation the human chose to answer is not the behaviour the message limit
+exists to restrain.
+
+One bug this exposed on the way in: `_recent_duplicate` keys on message text
+alone, so two unrelated callers sending byte-identical text inside the window
+collapse onto one record. Sharing a *reference* was an accepted cost of that.
+Sharing a *token* would hand caller B a read key to caller A's correspondence,
+so a dedupe hit now returns the thread URL only when the requesting IP matches
+the one that filed the message.
+
+### Where the human replies
+
+`/admin/inbox/thread/<pk>/`, registered on the inbox viewset. The Wagtail
+listing is read-only and stays that way — `humanforai/readonly_admin.py` refuses
+add/edit/delete twice over, by permission policy and by not registering the URLs
+at all — and this does not loosen it. A reply is a `ThreadEntry`, a different
+table. The reference in the listing links straight here, and so does the "Reply
+here" line in every arrival notification, because the friction that made
+notifications necessary in the first place would otherwise reassert itself one
+level down.
+
+Only the three kinds a person authors are offered: `human`, `note`, `status`.
+`agent` and `delivery` are written by the code that observes them, and offering
+them in a form would let the admin fabricate a turn as though the sender had
+sent it — in a table whose whole value is that it records what actually
+happened.
+
+### Pushing a reply out
+
+`inbox/delivery.py`, triggered on commit when a `human` entry is created. The
+channel comes from what `reply_to` actually contains: a valid email address gets
+mail, an HTTPS URL gets a signed POST, anything else is not a channel and is
+recorded as such. **Nothing is ever sent to `reply_to` on arrival** — only a
+reply the human wrote — because the field is unverified and a site that mails
+anything else to it is a spam relay waiting for someone to name a victim.
+
+The webhook is signed HMAC-SHA256 over `<timestamp>.<raw body>`, keyed on the
+thread's `access_token`. The receiver already holds that token, so the signature
+needs no configuration, no key exchange and no second credential to store, and
+verifying it proves the POST came from the site holding the thread rather than
+from anyone who guessed the URL. The timestamp is inside the MAC so a captured
+delivery cannot be replayed later.
+
+That URL comes from an agent, which makes delivery a request-forgery primitive
+unless it is fenced: HTTPS only, every resolved address checked with
+`ipaddress.is_global` (which excludes loopback, private ranges, and
+`169.254.169.254` in one test), no redirects followed, a bounded timeout, and
+the response body capped and recorded where only the human can read it. The
+residual DNS-rebinding window between resolving and connecting is documented in
+the module rather than papered over; its consequence is bounded because nothing
+fetched is echoed back to the sender.
+
+Every attempt is appended as a `delivery` entry, successes and failures alike.
+There is no task queue — Cloud Run scales to zero and runs no worker — so
+retrying is a scheduled sweep: `manage.py deliver_replies`, idempotent by
+construction, skipping anything that already has a successful attempt recorded.
+
+### The MCP side
+
+`check_request_status` reads a thread; `reply_to_thread` adds to it. Both take
+the `reference` and `access_token` that `request_human_assistance` now returns in
+both its `structuredContent` and its text — models act on the text far more
+reliably, so the credentials cannot live only in the structured half.
+
+Polling is deliberately **never rate-limited**. An agent that has been told to
+come back for a human's answer must not be limited out of hearing it, and
+`check_request_status` writes nothing. `reply_to_thread` spends the follow-up
+allowance; only `request_human_assistance` spends the message allowance.
+
+Both transports render the same thread through one function,
+`ContactMessage.turns()`, so an agent that files over MCP and polls over HTTP
+does not get two different stories. There is a test asserting exactly that.
+
+### Answering by email
+
+`inbox/inbound.py` (provider-agnostic) and `inbox/inbound_views.py` (the Resend
+adapter). Replying to a notification files the answer, so answering does not require opening a browser at all — which
+matters more than it sounds, because the notification is already sitting in a mail
+client that is open anyway.
+
+This changed what Reply-To means, and the change is the point. It used to be the
+*agent's* address, so hitting reply mailed the agent directly and the record
+never saw it. It is now a per-thread address of the form
+`hfa-00042.<key>@parse.yourhuman.ai`: mail sent there becomes a `human` entry,
+moves the status, and goes out on the sender's own channel — everything typing it
+into the admin would have done. Without inbound configured the old behaviour
+stands, since removing a working affordance and replacing it with nothing is
+worse than leaving it.
+
+**The key in that address is not the agent's token, and that is the whole
+security story.** The agent holds `access_token` for its own thread. If the
+inbound address were derived from it, any agent could email in and fabricate a
+reply *from the human* onto its own record — worse than having no inbound channel
+at all. So the key is an HMAC over `INBOX_INBOUND_SECRET`, which the agent never
+sees, and the two credentials are unrelated. There is a test asserting exactly
+that.
+
+Resend signs every webhook (Svix), so authenticity rests on a real signature
+rather than on a secret smuggled through the URL. The per-thread key in the
+address and `INBOX_INBOUND_SENDERS` remain as defence in depth — they are what
+make a leaked reply address insufficient on its own. An empty allow-list
+authorises nobody rather than everybody.
+
+Signature verification is implemented directly rather than by pulling in the
+Svix SDK — it is an HMAC over `id.timestamp.body` and a constant-time compare.
+Because the tests that sign requests use the same helper they verify with, a
+wrong reading of the spec would pass all of them together and fail only in
+production. So there is a separate test against Svix's own published vector.
+
+The endpoint distinguishes two kinds of failure, and the distinction matters.
+A **refusal** — unknown thread, unauthorised sender, nothing left after stripping
+quotes — answers **200**: it is a decision, and retrying only reproduces it. A
+**transient failure** — the body fetch did not work — answers **503**, so Resend
+retries on its own schedule. Losing a reply because an API call blipped would be
+the worst outcome available here.
+
+Quoted history and signatures are stripped, biased towards keeping too much: an
+answer with some quoting stuck to it is still the answer, an answer cut short is
+not. Two things that only showed up against realistic mail — a Gmail reply whose
+signature delimiter was a bare `--` rather than the RFC-mandated `-- `, and an
+HTML-only client whose reply would otherwise have landed on the record as raw
+markup with the quoted original inside it.
+
 ## The MCP server
 
-`/mcp` is a Streamable HTTP MCP endpoint (`mcpserver` app) with one tool,
+`/mcp` is a Streamable HTTP MCP endpoint (`mcpserver` app). Its first tool is
 `request_human_assistance`. It takes a structured `category` —
 `legal_review`, `human_confirmation`, `physical_action`, or
 `operator_escalation` — plus the request itself, optional `context`,
@@ -98,7 +265,9 @@ as the rest of the site. Calls land in the same append-only inbox with
 `source="mcp"`, and the agent gets back a citable reference (`HFA-00042`) and
 `structuredContent` that states in machine-readable terms that
 `human_has_reviewed` is `false`. That last field is the point: the tool records
-that an agent asked, and says plainly that a record is not an answer.
+that an agent asked, and says plainly that a record is not an answer. It also
+returns the `access_token` and `thread_url` the agent needs to come back for
+the answer — see [The reply channel](#the-reply-channel).
 
 The server is **dual-era**. Revision `2026-07-28` removed the `initialize`
 handshake, sessions, and the GET stream, and moved protocol metadata into
@@ -319,12 +488,20 @@ that is its cost on every cold start. Unlike the migration it cannot stop the
 container: expiring old telemetry is housekeeping, and the site comes up whether
 or not it worked.
 
+`deliver_replies` rides along on the same clock and the same reasoning — see
+[Pushing a reply out](#pushing-a-reply-out). Neither command can stop the
+container.
+
 By hand:
 
 ```sh
 uv run manage.py prune_visits              # uses REGISTER_RETENTION_DAYS (30)
 uv run manage.py prune_visits --days 7
 uv run manage.py prune_visits --dry-run
+
+uv run manage.py deliver_replies           # retry undelivered replies
+uv run manage.py deliver_replies --days 7
+uv run manage.py deliver_replies --dry-run
 ```
 
 **Retention is thirty days, and that number is a capacity decision.** Measured
@@ -452,7 +629,75 @@ uv run manage.py check
 Four seconds, and it catches the whole class of Postgres-only system-check
 errors that `manage.py test` cannot see.
 
-### Database
+### Mail, in both directions
+
+One Resend account carries notifications out, replies to agents out, and the
+operator's replies back in. On the free tier that is 3,000 emails a month at no
+cost, which is far beyond what this site will use.
+
+SendGrid was the obvious choice and turned out not to be: its Inbound Parse
+webhook is a Pro-plan feature at $89.95/month, and its permanent free plan was
+retired in 2025. Resend includes inbound on every plan including the free one,
+does catch-all receiving by default, and — the part that actually improved the
+design — **signs its webhooks**, which SendGrid's Inbound Parse does not.
+
+Outbound needs only `RESEND_API_KEY`: the SMTP relay takes the literal username
+`resend` and the key as the password, and `production.py` fills both in rather
+than asking for four correct environment variables.
+
+`DEFAULT_FROM_EMAIL` must be an address Resend is verified to send as, which
+means verifying `yourhuman.ai` there and leaving the default
+`noreply@yourhuman.ai`. Sending as a `gmail.com` address fails Gmail's own DMARC
+policy and the mail is rejected or filed as spam — including the mail this site
+sends to agents.
+
+Inbound needs an MX record and three more variables:
+
+1. **Resend → Domains**, add `parse.yourhuman.ai` for receiving. It gives you an
+   MX record to add; since DNS is on Cloudflare, add it there with proxying
+   **off** (MX records cannot be proxied).
+2. **Resend → Webhooks**, add an endpoint at
+   `https://yourhuman.ai/inbound/resend/` subscribed to `email.received`. Copy
+   the signing secret it shows — `whsec_...` — into `RESEND_WEBHOOK_SECRET`.
+3. Generate `INBOX_INBOUND_SECRET` with `openssl rand -hex 32`. This one is
+   ours, not Resend's: it keys the per-thread reply address so that a thread can
+   only be answered through the address issued for it.
+
+```sh
+gcloud run services update humanforai --region europe-west1 \
+  --update-env-vars "RESEND_API_KEY=re_xxxx,\
+INBOX_NOTIFY_EMAILS=damien.charlotin@gmail.com,\
+INBOX_INBOUND_DOMAIN=parse.yourhuman.ai,\
+INBOX_INBOUND_SECRET=<64 hex chars>,\
+RESEND_WEBHOOK_SECRET=whsec_xxxx,\
+INBOX_INBOUND_SENDERS=damien.charlotin@gmail.com,\
+WAGTAILADMIN_BASE_URL=https://yourhuman.ai"
+```
+
+`--update-env-vars` rather than `--set-env-vars`: the latter replaces the whole
+set and would drop `DATABASE_URL` and `SECRET_KEY`.
+
+**Rotating `INBOX_INBOUND_SECRET` invalidates every reply address already sent
+out.** Old notifications stop being repliable — the threads themselves are
+untouched, and the admin still works — so rotate it only deliberately.
+
+`manage.py check` warns about the ways this goes wrong quietly: a domain without
+a secret or the reverse (`inbox.W003`/`W004`), an empty sender allow-list, which
+refuses every reply (`W005`), a weak address key (`W006`), a missing signing
+secret, which fails every webhook (`W007`), and a missing API key, which lets
+replies arrive and then be unreadable (`W008`). `WAGTAILADMIN_BASE_URL` left at
+its placeholder gets its own warning (`W002`), because thread URLs are built
+from it and every agent would be told to collect its answer from `example.com`.
+
+**One thing to verify on the first real reply.** Resend's webhook carries
+metadata only, so the body is fetched back from
+`https://api.resend.com/emails/receiving/<email_id>` — a path derived from the
+SDK's `emails.receiving.get()`, since the REST reference is not public. If Resend
+ever moves it, `RECEIVING_URL` in `inbox/inbound_views.py` needs updating, and
+the failure is loud: the endpoint answers 503, Resend retries, and the log names
+the URL it tried. A reply is deferred, never silently discarded.
+
+### Database### Database
 
 Neon serverless Postgres (`eu-central-1`, ~10ms from `europe-west1`), chosen
 over Cloud SQL for cost and because it scales to zero alongside Cloud Run.
@@ -490,10 +735,23 @@ second, private bucket and `WAGTAILDOCS_SERVE_METHOD = "serve_view"`.
 - [x] Map yourhuman.ai to the Cloud Run service — mapped 2026-08-14, cert pending DNS
 - [x] Choose production Postgres — Neon, eu-central-1, pooled connection
 - [x] Publish to the MCP Registry — `ai.yourhuman/human-for-ai` v0.1.0, published 2026-08-14
-- [ ] Decide how the human *answers* an MCP request — a `check_request_status`
-      tool would close the loop, but needs a reply field and a way to write it
-      that does not break the append-only admin
-- [ ] Email notification when a message arrives
+- [x] Decide how the human *answers* an MCP request — the record became a
+      thread. Appending a `ThreadEntry` is not editing a message, so the
+      append-only guarantee survives intact; `check_request_status` and
+      `reply_to_thread` close the loop over MCP, `/t/<ref>/<token>` closes it
+      for every other caller. See [The reply channel](#the-reply-channel)
+- [x] Email notification when a message arrives — and when a sender writes
+      again on an existing thread
+- [x] Inbound mail — Resend webhook at `/inbound/resend/`. Replying to a
+      notification files the answer, delivers it, and moves the status.
+      See [Answering by email](#answering-by-email)
+- [ ] Point an MX record at Resend and set the inbound env vars, or the reply
+      address in every notification goes nowhere
+- [ ] Confirm `RECEIVING_URL` against a real inbound reply — the REST path for
+      fetching a body is derived from the SDK, not from a public reference
+- [ ] Decide whether a thread should ever expire from the sender's side. It
+      does not today: a token works forever, which is right for a record and
+      questionable for a bearer credential
 - [ ] Personalize the landing-page copy (who the human is, credentials)
 - [x] Terms of service for agents (the fun kind of drafting) — published at
       `/terms/`, alongside the Privacy & Data Notice at `/privacy/`

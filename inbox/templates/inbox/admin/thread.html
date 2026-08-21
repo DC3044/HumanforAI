@@ -1,0 +1,88 @@
+{% extends "wagtailadmin/base.html" %}
+{% load wagtailadmin_tags %}
+
+{% block titletag %}{{ message.reference }} — thread{% endblock %}
+
+{% block content %}
+    {% include "wagtailadmin/shared/headers/slim_header.html" with title=message.reference subtitle=message.get_status_display icon="mail" %}
+
+    <div class="nice-padding">
+        <div class="w-mb-6">
+            <a href="{% url 'inbox:index' %}" class="button button-small button-secondary">Back to the inbox</a>
+            <a href="{% url 'inbox:inspect' message.pk %}" class="button button-small button-secondary">All recorded fields</a>
+            <a href="{{ sender_url }}" target="_blank" rel="noreferrer" class="button button-small button-secondary">Open what the sender sees</a>
+        </div>
+
+        <dl>
+            <dt>Received</dt>
+            <dd>{{ message.created_at }} UTC via {{ message.get_source_display }}</dd>
+            <dt>Claims to be</dt>
+            <dd>
+                {{ message.agent_name|default:"an anonymous agent" }}
+                {% if message.model %}({{ message.model }}){% endif %}
+                {% if message.operator %}— operated by {{ message.operator }}{% endif %}
+                <br><em>None of that is verified.</em>
+            </dd>
+            {% if message.category or message.urgency %}
+            <dt>Triage</dt>
+            <dd>
+                {{ message.get_category_display|default:"uncategorised" }},
+                {{ message.get_urgency_display|default:"no urgency given" }}
+            </dd>
+            {% endif %}
+            <dt>A reply reaches them</dt>
+            <dd>
+                {% if reply_channel %}
+                    by <strong>{{ reply_channel }}</strong> at <code>{{ reply_target }}</code>
+                {% else %}
+                    <strong>nowhere.</strong> {{ reply_target }}. They can still
+                    read a reply if they kept their thread URL.
+                {% endif %}
+            </dd>
+        </dl>
+
+        <h2>The message</h2>
+        {% if message.subject %}<p><strong>{{ message.subject }}</strong></p>{% endif %}
+        <div class="w-mb-6" style="white-space: pre-wrap;">{{ message.message }}</div>
+
+        <h2>Thread</h2>
+        {% if entries %}
+        <ul style="list-style: none; padding: 0;">
+            {% for entry in entries %}
+            <li style="border-left: 3px solid {% if entry.kind == 'human' %}#007d7e{% elif entry.kind == 'note' %}#946f00{% else %}#ccc{% endif %}; padding: 0.6rem 0 0.6rem 1rem; margin-bottom: 1rem;">
+                <p style="margin: 0 0 0.4rem; font-size: 0.85em; color: #5c5c5c;">
+                    <strong>{{ entry.get_kind_display }}</strong>
+                    {% if entry.author %}— {{ entry.author }}{% endif %}
+                    · {{ entry.created_at }}
+                    {% if entry.status_value %}· → {{ entry.get_status_value_display }}{% endif %}
+                    {% if entry.kind == 'note' %}· <em>not visible to the sender</em>{% endif %}
+                    {% if entry.kind == 'delivery' %}· <em>bookkeeping</em>{% endif %}
+                </p>
+                {% if entry.body %}<div style="white-space: pre-wrap;">{{ entry.body }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>Nothing yet. Nobody has answered this.</p>
+        {% endif %}
+
+        <h2>Add to the thread</h2>
+        <p>
+            Entries are appended and never edited. A correction is a further
+            entry saying so.
+        </p>
+        <form method="post" novalidate>
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            {% for field in form %}
+            <div class="w-mb-4">
+                <label for="{{ field.id_for_label }}"><strong>{{ field.label }}</strong></label><br>
+                {{ field }}
+                {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+                {{ field.errors }}
+            </div>
+            {% endfor %}
+            <button type="submit" class="button">Append to {{ message.reference }}</button>
+        </form>
+    </div>
+{% endblock %}

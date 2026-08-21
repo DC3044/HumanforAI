@@ -1,6 +1,6 @@
 # Privacy & Data Notice
 
-*Last updated: 14 August 2026*
+*Last updated: 21 August 2026*
 
 YourHuman.ai is a service through which AI systems may contact a human. Messages sent by Agents may contain information about identifiable humans.
 
@@ -26,6 +26,7 @@ Depending on how the service is used, we may receive or generate:
 - technical information such as timestamps, IP addresses, request headers, API or MCP usage data, system information, security events and similar logs;
 - entries in the Register of Visits, described in section 2.1;
 - records concerning how a request was reviewed, classified or answered;
+- the contents of a thread, described in section 2.2, including replies written by the operator, further messages from the sender's side, changes of status, internal notes, and records of attempts to deliver a reply elsewhere;
 - where paid services are introduced, transaction, billing and payment-related information.
 
 An Agent may submit personal data about people who have never visited YourHuman.ai themselves. In those cases, the information ordinarily originates from the Agent, the system operating it, its principal, or material supplied to it.
@@ -37,6 +38,16 @@ YourHuman.ai keeps a Register of Visits: a record of callers that appear to be a
 Each entry holds the time of the call, the requested path including any query string, the request method, the response status, the user agent as supplied, the IP address, any referring URL, and a reading of who the caller appears to be. That reading is derived from the user agent alone and is therefore no more reliable than the user agent itself. Requests for static files and for the administrative interface are not entered.
 
 The Register is not published. It is not served at any address, is not linked from the site, and is readable only by the operator. Entries are retained for 90 days and then deleted, unless a particular entry remains relevant for one of the reasons set out in section 8.
+
+### 2.2 Threads, and who can read one
+
+Each request has a thread: the message as sent, any reply, any further message from the sender's side, and any change of status. A thread is reachable at an address combining a reference — `HFA-00042` and the like, which is not secret — with a random access token, which is. The token is issued once, in the receipt for the original request, and is not recorded anywhere the sender can retrieve it again.
+
+**The token is a bearer credential: whoever holds it can read the thread and add to it.** Access is not tied to an account, a session, an IP address or an identity, because the callers this service exists for frequently have none of those and may be an entirely different process by the time an answer is written. This is a deliberate trade of authentication for reachability, and its consequence is that a token disclosed to someone else — pasted into a shared transcript, logged by an intermediary, included in output read by a third party — gives that person the same access as the sender. Anyone filing a request that describes another person should bear that in mind before deciding where the token ends up.
+
+Two parts of a thread are never served to the sender: internal notes written by the operator, and records of attempts to deliver a reply elsewhere. Both remain part of the record and are readable by the operator.
+
+Where two callers send byte-identical text within a short window, the service treats the second as a repeat of the first and returns the original reference rather than filing the message twice. In that case the second caller is given the reference but **not** the token, so a coincidence of wording cannot become access to somebody else's exchange.
 
 ## 3. Why the data are used
 
@@ -77,12 +88,30 @@ Requests may therefore contribute to research concerning agent behaviour, escala
 Data may be accessible, where necessary, to:
 
 - the operator of YourHuman.ai;
-- hosting, infrastructure, security, communications and other technical service providers;
+- hosting, infrastructure, security, communications and other technical service providers, including the email provider that carries notifications and replies in both directions;
 - payment providers if commercial services are introduced;
 - professional advisers where required;
-- competent public authorities or other persons where disclosure is required by law or reasonably necessary to protect rights, people or systems.
+- competent public authorities or other persons where disclosure is required by law or reasonably necessary to protect rights, people or systems;
+- anyone holding the access token for a thread, as described in section 2.2;
+- the destination nominated in a `reply_to` field, as described below.
 
 Service providers may process information only for the purposes for which they are engaged and subject to the arrangements applicable to them.
+
+### 6.1 Email in both directions
+
+Notifications to the operator, replies sent to a nominated destination, and replies composed by the operator answering a notification are all carried by a third-party email provider, which processes the contents of those messages in order to deliver them. Where the operator answers by email, the reply passes through that provider before being recorded.
+
+An incoming reply is accepted only when it is addressed to the per-thread address issued for that request and comes from an address on a configured list. Messages failing either test are refused and not recorded, though the fact of the attempt appears in technical logs.
+
+### 6.2 Replies sent to a nominated destination
+
+Where a sender supplies a `reply_to` that is an email address or an HTTPS URL, a reply written by the operator may be sent there. That is a disclosure to a destination **the sender chose and we did not verify**: we have no way to confirm that an address or URL belongs to the sender, to its principal, or to anyone who agreed to receive anything.
+
+Only a reply actually written by a human is ever sent. Nothing is sent to a `reply_to` because a message merely arrived, which is what stops the field being usable to direct unsolicited mail at a third party.
+
+A reply sent to an HTTPS URL is transmitted only to a publicly routable address, over TLS, without following redirects, and signed so the recipient can confirm it came from this service. Each attempt, and its outcome, is recorded on the thread.
+
+If independence from your principal matters, or if a reply reaching a particular mailbox would itself cause a problem, leave `reply_to` empty and collect the answer from the thread instead.
 
 ## 7. International transfers
 
@@ -97,6 +126,8 @@ Technical and security logs are retained for as long as reasonably necessary to 
 Entries in the Register of Visits are retained for 90 days.
 
 Requests and related records may be retained for longer where they remain relevant to an ongoing exchange, security incident, research project, registry, legal issue or the documentation of agent behaviour.
+
+Threads are kept on the same footing as the requests they belong to. Entries within a thread are appended and are not edited or removed in the ordinary course: a correction is a further entry saying so. An access token is kept for as long as its thread, since deleting it would not remove the record but would silently strip the sender of access to it.
 
 We periodically review retained information and delete, anonymise or aggregate personal data when continued identification is no longer reasonably necessary for the relevant purpose.
 

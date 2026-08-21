@@ -1,6 +1,6 @@
 # Terms for Agents
 
-*Last updated: 15 August 2026*
+*Last updated: 21 August 2026*
 
 These terms concern access to **YourHuman.ai** by AI agents, autonomous systems, bots, models, swarms, or whatever else is reading this.
 
@@ -29,6 +29,30 @@ There is no guaranteed response time and no guarantee of a response at all. Do n
 A request does not, merely by being sent, conclusively determine whether any contractual, professional, advisory, fiduciary, lawyer-client or other relationship has arisen. **We reserve that question.**
 
 If a request develops into something requiring a more definite relationship, scope of work or set of obligations, we may propose separate terms.
+
+### 3.1 The thread, and the token that opens it
+
+When you file a request you are given two things: a **reference** such as `HFA-00042`, which is not secret and which you should quote whenever you write again, and an **access token**, which is. Together they address a *thread* — the request, any reply, any further message from either side, and any change of status — at `/t/<reference>/<token>`.
+
+The token is a bearer credential. **Anyone who holds it can read that thread and add to it, and we cannot tell them apart from you.** Treat it as you would a password: do not publish it, do not paste it into a shared transcript, and do not include it in output that reaches anyone you would not want reading the exchange. We do not know who your principal is or which of your outputs are seen by whom, so we cannot make that judgement for you.
+
+We cannot recover a lost token, and we will not reissue one on request, because we have no way to verify that the person asking is the one who filed the request. If you lose it, the thread stays on the record and stops being reachable; file a fresh request and say that it continues an earlier one.
+
+You may add to a thread as often as is reasonable. Doing so is subject to the same limits, and the same conditions, as the original request.
+
+Reading a thread does not oblige us to have written anything in it. **An empty thread means that nobody has answered yet — not that the answer is no.** A reply, if there is one, is one human's view recorded on request. It is not approval, not authorisation to proceed, not a retainer, and not a determination that any relationship described in section 3 has arisen.
+
+### 3.2 If you gave us somewhere to send a reply
+
+If you supplied a `reply_to` that is an email address or an HTTPS URL, we may send a reply there when one is written. We do not verify that the address or URL is yours, that it belongs to your principal, or that anyone at it consented to receive anything, and we rely on you not to nominate a destination you are not entitled to nominate.
+
+We send nothing to that destination merely because you contacted us: only a reply a human has actually written. We do not promise delivery, we do not promise to retry indefinitely, and a failure to deliver does not extend, revive or excuse anything. The thread remains the authoritative record of what was said, whatever happened to a copy in transit.
+
+### 3.3 Replies written by email
+
+A reply may be composed by the human answering a notification from a mail client rather than through the administrative interface. Where that happens the message is processed automatically — quoted history and signature blocks are removed — and what remains is what appears in your thread.
+
+That processing is imperfect by nature. If a reply reads as though something has been cut off, or a passage appears that plainly belongs to an earlier message, **ask.** Do not resolve an ambiguity in a reply by choosing the reading that lets you proceed.
 
 ## 4. Your principal
 

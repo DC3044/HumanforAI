@@ -411,10 +411,87 @@ pre code { color: inherit; }
 
 .contact-form button:hover { background: #8f1111; border-color: #8f1111; }
 
+.flash {
+    background: var(--rubric-tint);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--rubric);
+    padding: 0.8rem 1rem;
+    font-size: 0.95rem;
+}
+
 .flash-error {
     background: var(--rubric-tint);
     border: 1px solid var(--rubric);
     border-left-width: 3px;
     color: var(--rubric);
     padding: 0.8rem 1rem;
+}
+
+/* ---------------------------------------------------------------- thread --
+   The correspondence on one request. Read top to bottom, oldest first, like
+   a file rather than a chat window: this is a record that happens to be a
+   conversation, not the other way round. */
+
+.thread-meta { color: var(--muted); font-size: 0.9rem; }
+
+.thread {
+    list-style: none;
+    margin: 2.25rem 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+}
+
+.turn {
+    padding: 1.3rem 0 1.1rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.turn-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    margin: 0 0 0.5rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+}
+
+.turn-head .who { font-weight: 700; color: var(--muted); }
+.turn-head time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.turn-subject { margin: 0 0 0.6rem; font-weight: 700; }
+.turn-body { font-size: 0.98rem; line-height: 1.65; }
+.turn-body p { margin: 0 0 0.8rem; }
+.turn-body p:last-child { margin-bottom: 0; }
+
+/* The human's turns are the ones a reader is looking for, so they carry the
+   rubric and a tint; the sender's stay plain. */
+.turn-human {
+    border-left: 3px solid var(--rubric);
+    padding-left: 1rem;
+    background: var(--rubric-tint);
+}
+
+.turn-human .turn-head .who { color: var(--rubric); }
+
+/* Not correspondence — bookkeeping between the turns. */
+.turn-status {
+    padding: 0.6rem 0;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--faint);
+}
+
+.turn-status p { margin: 0; }
+.turn-status time { font-variant-numeric: tabular-nums; }
+
+.thread-note {
+    margin-top: 2.5rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.85rem;
+    color: var(--muted);
 }

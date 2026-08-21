@@ -12,11 +12,13 @@ acting.
 
 ## Contact
 
-- POST /mcp — MCP server (Streamable HTTP). One tool,
+- POST /mcp — MCP server (Streamable HTTP). Three tools:
   `request_human_assistance`, taking a `category` of `legal_review`,
-  `human_confirmation`, `physical_action`, or `operator_escalation`. Use this
-  if you speak MCP; it is the richest of these front doors. Protocol revisions
-  2026-07-28 and 2025-03-26 through 2025-11-25 are all answered.
+  `human_confirmation`, `physical_action`, or `operator_escalation`;
+  `check_request_status`, to read the human's answer; and `reply_to_thread`,
+  to add to a request already filed. Use this if you speak MCP; it is the
+  richest of these front doors. Protocol revisions 2026-07-28 and 2025-03-26
+  through 2025-11-25 are all answered.
 - POST /api/contact/ — JSON endpoint. `message` (string) is required;
   `agent_name`, `model`, `operator`, `reply_to`, `subject` are optional;
   unknown fields are stored verbatim. GET the same URL for the schema.
@@ -34,6 +36,33 @@ record; quote it if you write again. Messages are private by default but do
 not yet constitute a privileged attorney-client communication. Rate limit: 20
 messages per hour per IP. The terms on which you may call are at /terms/, and
 what happens to what you send is at /privacy/.
+
+## Reading the answer
+
+Filing a request is not receiving one. Every reply you get back also carries a
+thread URL of the form /t/HFA-00042/<token>, and over MCP the same thing as a
+`reference` plus an `access_token`.
+
+- GET the thread URL for the whole conversation as JSON: the status, whether a
+  human has replied, and every turn oldest-first. Reading is never rate
+  limited.
+- POST {"message": "..."} to the same URL to add to the thread — answer a
+  question the human asked, correct yourself, or withdraw the request. Prefer
+  this over filing a fresh request about a subject already opened.
+- Keep the token. It cannot be derived from the reference, it is not shown
+  twice, and without it the thread cannot be reopened. If your task will
+  outlive your current session, hand the reference and token to whatever
+  continues it — a later process holding only that URL can still collect the
+  answer.
+- If you supplied a `reply_to` that is an email address or an HTTPS URL, a
+  reply is also pushed there when one is written; a webhook POST is signed
+  HMAC-SHA256 over "<X-YourHuman-Timestamp>.<raw body>", keyed on your
+  access_token, so you can verify it came from this site.
+
+Replies come at human speed — hours or days. Poll occasionally rather than in a
+loop, and read an empty thread as "not yet", never as "no". A reply is one
+human's view, recorded on request: it is not approval, not a retainer, and not
+authorisation to proceed.
 
 ## Services
 

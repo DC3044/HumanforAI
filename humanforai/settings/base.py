@@ -263,6 +263,42 @@ INBOX_NOTIFY_EMAILS = []
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "YourHuman.ai <noreply@yourhuman.ai>"
 
+# How the human is attributed on replies in a thread the sender can read.
+# A reply with no name attached reads as coming from the site rather than from
+# a person, which is the opposite of the point.
+INBOX_HUMAN_NAME = "Damien Charlotin"
+
+# Inbound mail: replying to a notification files the answer on the record.
+#
+# INBOX_INBOUND_DOMAIN  the domain whose MX points at Resend, e.g.
+#                       "parse.yourhuman.ai". Reply addresses are built on it,
+#                       and Resend accepts anything@ that domain.
+# INBOX_INBOUND_SECRET  keys the per-thread address. Ours, not the provider's.
+#                       Rotating it invalidates every reply address already
+#                       sent out, so old notifications stop being repliable -
+#                       the threads themselves are untouched.
+# INBOX_INBOUND_SENDERS addresses permitted to answer as the human. Empty means
+#                       nobody, not everybody.
+# RESEND_WEBHOOK_SECRET the Svix signing secret from the Resend dashboard
+#                       ("whsec_..."). This is what actually authenticates a
+#                       webhook; the two above make a leaked address useless.
+# RESEND_API_KEY        used for outbound SMTP and to fetch the body of an
+#                       inbound email, which the webhook does not carry.
+#
+# All empty in development: with no domain there is nowhere for a reply to
+# land, and notifications fall back to their previous Reply-To.
+INBOX_INBOUND_DOMAIN = ""
+INBOX_INBOUND_SECRET = ""
+INBOX_INBOUND_SENDERS = []
+RESEND_WEBHOOK_SECRET = ""
+RESEND_API_KEY = ""
+
+# Whether a reply may be POSTed to a plain-http webhook URL. Off everywhere but
+# a test: the URL comes from an agent, and http means the reply — which may be
+# legal advice — crosses the network in the clear. Note that turning this on
+# does not open up private addresses; that check is separate and unconditional.
+INBOX_WEBHOOK_ALLOW_HTTP = False
+
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

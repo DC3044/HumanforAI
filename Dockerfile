@@ -47,8 +47,15 @@ EXPOSE 8080
 # often enough that boot is a serviceable clock, and the command is cheap when
 # there is nothing to delete — an indexed count that returns zero.
 #
-# Unlike the migration it is not allowed to stop the container: expiring old
-# telemetry is housekeeping, and the site must come up whether or not it worked.
+# `deliver_replies` rides along on the same reasoning. A reply is pushed to the
+# sender the moment it is written; this only picks up the ones whose destination
+# was down at that moment, which is the case a single inline attempt cannot
+# cover. It sends nothing when there is nothing pending.
+#
+# Unlike the migration, neither is allowed to stop the container: expiring old
+# telemetry and retrying a delivery are both housekeeping, and the site must come
+# up whether or not either worked.
 CMD python manage.py migrate --noinput && \
     { python manage.py prune_visits || echo "prune_visits failed; serving anyway"; } && \
+    { python manage.py deliver_replies || echo "deliver_replies failed; serving anyway"; } && \
     gunicorn humanforai.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 60

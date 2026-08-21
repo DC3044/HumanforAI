@@ -45,3 +45,26 @@ def is_throttled(request):
         # endpoint for anyone whose proxy strips the header.
         return False
     return recent_from(ip_address).count() >= LIMIT_PER_WINDOW
+
+
+# Follow-ups get their own, more generous allowance, counted separately.
+# Continuing a conversation the human chose to answer is not the behaviour the
+# message limit exists to restrain, and an agent that spends its whole quota on
+# a thread would be unable to open a new one.
+FOLLOW_UP_LIMIT_PER_WINDOW = 60
+
+
+def follow_ups_from(ip_address, seconds=WINDOW_SECONDS):
+    from .models import ThreadEntry
+
+    since = timezone.now() - timedelta(seconds=seconds)
+    return ThreadEntry.objects.filter(
+        kind=ThreadEntry.Kind.AGENT, ip_address=ip_address, created_at__gte=since
+    )
+
+
+def follow_up_throttled(request):
+    ip_address = client_ip(request)
+    if not ip_address:
+        return False
+    return follow_ups_from(ip_address).count() >= FOLLOW_UP_LIMIT_PER_WINDOW
