@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import io
 import json
 import time
 import urllib.error
@@ -1792,9 +1793,58 @@ class FetchBodyTests(TestCase):
             with self.assertRaises(RuntimeError):
                 inbound_views.fetch_body("em_1")
 
+    def test_it_identifies_itself(self):
+        """api.resend.com is behind Cloudflare, which 403s urllib's default
+        `Python-urllib/3.x` agent before the request reaches Resend. Omitting
+        this header makes a working key look like a permissions failure."""
+        captured = {}
+
+        def capture(request, timeout=None):
+            captured["ua"] = request.get_header("User-agent")
+            raise urllib.error.URLError("stop here")
+
+        with mock.patch(
+            "inbox.inbound_views.urllib.request.urlopen", side_effect=capture
+        ):
+            with self.assertRaises(RuntimeError):
+                inbound_views.fetch_body("em_1")
+
+        self.assertIsNotNone(captured["ua"], "no User-Agent sent")
+        self.assertNotIn("urllib", captured["ua"].lower())
+        self.assertNotIn("python", captured["ua"].lower())
+
+    def test_a_403_says_the_key_is_restricted(self):
+        """The failure that actually happened. An earlier version of this
+        message only guessed at 404, so the log pointed at the wrong cause."""
+        error = urllib.error.HTTPError(
+            "https://api.resend.com/emails/receiving/em_1", 403, "Forbidden", {},
+            io.BytesIO(b'{"name":"restricted_api_key"}'),
+        )
+        with mock.patch(
+            "inbox.inbound_views.urllib.request.urlopen", side_effect=error
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                inbound_views.fetch_body("em_1")
+        message = str(caught.exception)
+        self.assertIn("Full access", message)
+        self.assertIn("restricted_api_key", message)
+
+    def test_a_401_says_the_key_is_missing_or_invalid(self):
+        error = urllib.error.HTTPError(
+            "https://api.resend.com/emails/receiving/em_1", 401, "Unauthorized", {},
+            io.BytesIO(b'{"name":"missing_api_key"}'),
+        )
+        with mock.patch(
+            "inbox.inbound_views.urllib.request.urlopen", side_effect=error
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                inbound_views.fetch_body("em_1")
+        self.assertIn("not a valid key", str(caught.exception))
+
     def test_a_404_says_the_endpoint_moved(self):
         error = urllib.error.HTTPError(
-            "https://api.resend.com/emails/receiving/em_1", 404, "Not Found", {}, None
+            "https://api.resend.com/emails/receiving/em_1", 404, "Not Found", {},
+            io.BytesIO(b'{"name":"not_found"}'),
         )
         with mock.patch(
             "inbox.inbound_views.urllib.request.urlopen", side_effect=error

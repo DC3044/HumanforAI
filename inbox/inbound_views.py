@@ -17,9 +17,13 @@ That shapes how this endpoint answers, and the distinction is deliberate:
 * A **refusal** — unknown thread, unauthorised sender, nothing left after
   stripping quotes — answers **200**. It is a decision, not a failure, and
   retrying it only reproduces the same decision.
-* A **transient failure** — the body fetch did not work — answers **5xx**, so
-  Resend retries on its own schedule. Losing a reply because an API call
-  blipped would be the worst outcome available here.
+* A **failure to retrieve the body** answers **5xx**, so Resend retries on its
+  own schedule. That covers the transient case, where an API call simply
+  blipped. It also covers the *fixable* case — a restricted API key, a moved
+  endpoint — where retrying is still right, because it holds the reply in the
+  provider's queue long enough for the operator to correct the configuration
+  and have it arrive by itself. The one thing never to do here is answer 200,
+  which discards a reply a human actually wrote.
 """
 
 import base64
@@ -45,6 +49,10 @@ logger = logging.getLogger(__name__)
 # If Resend moves it, every inbound reply fails loudly with this URL in the log
 # rather than quietly doing nothing — see `fetch_body`.
 RECEIVING_URL = "https://api.resend.com/emails/receiving/{email_id}"
+
+# Sent on every outbound call this module makes. See fetch_body for why an
+# explicit agent is required rather than merely polite.
+USER_AGENT = "YourHuman.ai inbound fetch"
 
 FETCH_TIMEOUT = 10
 
@@ -128,6 +136,13 @@ def fetch_body(email_id):
         headers={
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
+            # Not cosmetic, and not optional. api.resend.com is behind
+            # Cloudflare, which blocks urllib's default `Python-urllib/3.x`
+            # agent with a 403 before the request reaches Resend at all. The
+            # same key succeeds from any client that identifies itself
+            # differently, which makes this look convincingly like a
+            # permissions problem and cost an afternoon to find.
+            "User-Agent": USER_AGENT,
         },
         method="GET",
     )
@@ -135,11 +150,36 @@ def fetch_body(email_id):
         with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        # The status alone is not enough to act on, so read the body: Resend
+        # names the actual cause there. An earlier version guessed at 404 and
+        # said nothing about 403, which is the far likelier failure and the one
+        # that actually happened.
+        try:
+            detail = exc.read(500).decode("utf-8", "replace")
+        except Exception:
+            detail = "(no body)"
+
+        hint = {
+            401: (
+                "RESEND_API_KEY is missing or not a valid key."
+            ),
+            403: (
+                "if the body above is a Cloudflare error page, the request was "
+                "blocked before reaching Resend - check the User-Agent header. "
+                "If it names restricted_api_key, RESEND_API_KEY is a sending-only "
+                "key and needs Full access. These look identical from the status "
+                "code alone, which is why the body is printed above."
+            ),
+            404: (
+                "the receiving endpoint has moved and RECEIVING_URL in "
+                "inbox/inbound_views.py needs updating."
+            ),
+        }.get(exc.code, "see the response body above.")
+
         # The URL is in the message on purpose: if Resend ever moves this path,
         # this line is what says so, rather than replies quietly vanishing.
         raise RuntimeError(
-            f"Resend returned HTTP {exc.code} for {url}. If this is a 404, the "
-            f"receiving endpoint has moved and RECEIVING_URL needs updating."
+            f"Resend returned HTTP {exc.code} for {url} - {detail} - {hint}"
         ) from exc
     except Exception as exc:
         raise RuntimeError(f"Could not reach {url}: {exc!r}") from exc
