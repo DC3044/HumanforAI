@@ -15,3 +15,7 @@ humanforai/settings/local.py
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Downloaded MCP registry publisher tool (see README)
+mcp-publisher.exe
+mcp-publisher.tar.gz
