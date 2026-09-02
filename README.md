@@ -782,3 +782,21 @@ second, private bucket and `WAGTAILDOCS_SERVE_METHOD = "serve_view"`.
 - [ ] Personalize the landing-page copy (who the human is, credentials)
 - [x] Terms of service for agents (the fun kind of drafting) — published at
       `/terms/`, alongside the Privacy & Data Notice at `/privacy/`
+
+## License
+
+The code is MIT licensed — see [LICENSE](LICENSE). Fork it, run your own, put
+your own human behind it.
+
+Two things in this repository are **not** covered by that grant, because a
+software licence is the wrong instrument for either:
+
+- `humanforai/static/img/damien-charlotin.jpg` is a photograph of a person.
+  MIT would license his likeness along with the source, which is not intended.
+  Replace it with your own.
+- `Terms.md` and `Privacy & Data Notice.md` describe undertakings *this*
+  operator makes about *this* service, and are rendered at `/terms/` and
+  `/privacy/`. They are here because the site builds its pages from them, not
+  as a template. Adapt them by all means, but read them first: shipping them
+  unchanged means promising things about a service you run, in the first
+  person, on someone else's behalf.
