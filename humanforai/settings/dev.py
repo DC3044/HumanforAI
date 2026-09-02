@@ -1,10 +1,14 @@
+import os
+import secrets
+
 from .base import *
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-=@11)u+q&q!1q2gwz7e9)-g9379$*uz&x49mz4+ahxiejtl_7^"
+# A development process gets its own ephemeral key unless a developer supplies
+# one explicitly. Production always takes SECRET_KEY from its environment.
+SECRET_KEY = os.environ.get("DJANGO_DEV_SECRET_KEY") or secrets.token_urlsafe(50)
 
 # SECURITY WARNING: define the correct hosts in production!
 ALLOWED_HOSTS = ["*"]
